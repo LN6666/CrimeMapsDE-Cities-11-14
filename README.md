@@ -33,6 +33,16 @@
 
 两城模块目前只能将**事先人工取得并放在本机的官方原文**以 JSONL 形式离线暂存：每行必须有 `source_id`、`source_url`、`publisher`、`title`、`published`、`body`，URL 与 ID 须符合各自官方站点。暂存过程不联网，写入 `source_verified=0` 和 `review_status=pending`；字段校验不等于核验原文。市域标记仅是复核线索。来源核验、逐篇 Codex 审查、所有者质询与批准之前，不能发布这些记录。
 
+## 四城只读来源契约
+
+`registry.py` 固定四个城市的 slug、显示名、EPSG、来源类型、来源 URL、采集模式和市域复核标记。Essen、Hannover、Nuremberg 使用 EPSG:25832；Dresden 使用 EPSG:25833。这些坐标系只是后续 GIS 的元数据，本仓库不生成坐标。
+
+`source_audit.py` 以 SQLite 只读模式审计本地数据库，按年度输出版本号为 `1` 的 JSON。它分别适配 Essen、Hannover 的在线采集表和 Dresden、Nuremberg 的离线暂存表。每城有 `archive_complete`、`source_verified`、`publication_ready`、`blocking_reasons`、`records` 和 `municipal_review_candidates`。每条记录只导出来源 ID、URL、日期、SHA-256、修订号、市域标记、复核状态及完整性布尔值；不导出标题、正文、市域证据原句、坐标或几何。审计时会在本机读取正文，重算哈希、核对修订表和市域标记，但不修改来源库。
+
+`municipal_review_candidates` 只收录正文存在、哈希与修订一致、来源 ID/URL 合法、原文支持当前市域标记，且未被审查驳回的在线来源记录。这些记录仍是**待逐篇审查的市域线索**，不能据此推断具体案发点。离线暂存缺少可核查的原始来源核验记录，因此即使 SQLite 的可变 `source_verified` 字段被改为 `1`，审计输出仍将其判为未核验，不列入候选。在线记录的 `source_verified` 仅表示本地已保存文章的来源格式和正文完整性核对通过，不能代替对当前官网原文的再次复核。
+
+现阶段 `publication_ready` 恒为 `false`。未完成的年度档案覆盖、未核验来源、缺少与修订绑定的 Codex 审查、缺少本批次所有者批准以及不存在获准地图构建，都会在 `blocking_reasons` 中说明。第一组工程消费此契约时仍须执行自己的逐篇审核与发布门禁。
+
 ## 本地运行
 
 需要 Python 3.12 和 `uv`。
@@ -48,6 +58,8 @@ PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.hannover --year 2026 --
 # 仅当人工已有官方原文 JSONL 时，才运行离线暂存：
 PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.dresden --input .runtime/safety/cities/dresden/source.jsonl
 PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.nuremberg --input .runtime/safety/cities/nuremberg/source.jsonl
+# 四城来源元数据审计；输出只有 JSON，不改变来源数据库
+PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.source_audit --year 2026
 ```
 
 各城市的默认数据库在 `.runtime/safety/cities/<slug>/police.sqlite`。埃森 `--full` 与汉诺威年度续扫会在多次运行间记录档案页码；`--max-pages`、`--pages`、`--limit` 只限制**一次网络采集运行**的请求量，并非三天审查篇数或发布时间表。再次运行可从本地断点继续。来源失效时保持上次已保存的原文和修订，不生成替代数据。
