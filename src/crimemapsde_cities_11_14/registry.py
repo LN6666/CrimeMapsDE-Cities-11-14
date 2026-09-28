@@ -34,8 +34,8 @@ CITIES = {
         "Dresden",
         25833,
         "official_media_archive",
-        "https://medienservice.sachsen.de/medien/?search%5Binstitution_ids%5D%5B%5D=10997",
-        "offline",
+        "https://www.medienservice.sachsen.de/medien/?search%5Binstitution_ids%5D%5B%5D=10997",
+        "online",
         "dresden_candidate",
     ),
     "hannover": CitySource(

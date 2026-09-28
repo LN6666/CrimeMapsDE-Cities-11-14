@@ -24,6 +24,7 @@ REPORT_COLUMNS = {
     "essen": {"source_id", "source_url", "title", "published", "body", "sha256", "revision", "city_scope", "scope_evidence", "review_status"},
     "hannover": {"id", "url", "title", "published", "body", "sha256", "revision", "city_scope", "scope_evidence", "review_status"},
     "nuremberg_newsroom": {"id", "url", "title", "published", "body", "sha256", "revision", "city_scope", "scope_evidence", "review_status"},
+    "dresden": {"source_id", "source_url", "publisher", "title", "published", "body", "sha256", "revision", "city_scope", "scope_evidence", "source_verified", "review_status"},
     "offline": {"source_id", "source_url", "title", "published", "body", "sha256", "revision", "city_scope", "scope_evidence", "source_verified", "review_status"},
 }
 REVISION_COLUMNS = {"revision", "sha256"}
@@ -73,7 +74,8 @@ def _valid_identity(slug: str, ident: object, url: object, mode: str) -> bool:
 
 
 def _row_audit(
-    db: sqlite3.Connection, slug: str, city: CitySource, row: sqlite3.Row, year: int, mode: str
+    db: sqlite3.Connection, slug: str, city: CitySource, row: sqlite3.Row, year: int, mode: str,
+    provenance: sqlite3.Row | None = None,
 ) -> dict:
     online = mode != "offline"
     newsroom = mode in {"hannover", "nuremberg_newsroom"}
@@ -114,7 +116,26 @@ def _row_audit(
     locally_verified = identity_valid and hash_valid and revision_valid and _valid_date(row["published"], year)
     # Offline staging has no independently recorded original-source check. A
     # mutable SQLite flag alone cannot establish that verification happened.
-    source_verified = locally_verified and online
+    provenance_valid = True
+    if mode == "dresden":
+        canonical = hashlib.sha256(json.dumps(
+            {
+                "source_id": row["source_id"], "source_url": row["source_url"],
+                "publisher": row["publisher"], "title": row["title"],
+                "published": row["published"], "body": body,
+            }, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ).encode()).hexdigest()
+        provenance_valid = bool(
+            provenance is not None and provenance["publisher"] == dresden.PUBLISHER
+            and provenance["institution_id"] == "10997"
+            and provenance["record_type"] == "multi_event_bulletin"
+            and provenance["source_verified"] == 1
+            and provenance["source_sha256"] == canonical
+            and isinstance(provenance["raw_html_sha256"], str)
+            and len(provenance["raw_html_sha256"]) == 64
+            and row["source_verified"] == 1
+        )
+    source_verified = locally_verified and online and provenance_valid
     evidence_present = isinstance(row["scope_evidence"], str) and bool(row["scope_evidence"].strip())
     candidate = (
         source_verified
@@ -196,12 +217,21 @@ def audit_city(
                         mode = "offline"
                     else:
                         mode = "nuremberg_newsroom"
+                elif slug == "dresden":
+                    mode = (
+                        "dresden"
+                        if _columns(db, "sachsen_source_units") and _columns(db, "sachsen_archive_cursor")
+                        else "offline"
+                    )
                 else:
                     mode = "offline" if city.collection_mode == "offline" else slug
                 required = REPORT_COLUMNS[mode]
                 newsroom = mode in {"hannover", "nuremberg_newsroom"}
                 revisions = REVISION_COLUMNS | ({"id"} if newsroom else {"source_id"})
-                cursor_table = "archive_scan" if slug == "essen" else "archive_cursor"
+                cursor_table = (
+                    "archive_scan" if slug == "essen" else
+                    "sachsen_archive_cursor" if slug == "dresden" else "archive_cursor"
+                )
                 if (
                     not required <= report_columns
                     or not revisions <= _columns(db, "revisions")
@@ -212,6 +242,18 @@ def audit_city(
                 ):
                     result["blocking_reasons"].append("source_schema_incompatible")
                 else:
+                    provenance = {}
+                    if mode == "dresden":
+                        if not {
+                            "source_id", "publisher", "institution_id", "record_type",
+                            "source_sha256", "raw_html_sha256", "source_verified",
+                        } <= _columns(db, "sachsen_source_units"):
+                            result["blocking_reasons"].append("source_schema_incompatible")
+                        else:
+                            provenance = {
+                                row["source_id"]: row
+                                for row in db.execute("SELECT * FROM sachsen_source_units")
+                            }
                     if mode != "offline":
                         scan = db.execute(
                             f"SELECT complete FROM {cursor_table} WHERE year=?", (year,)
@@ -223,7 +265,10 @@ def audit_city(
                         (f"{year:04d}-%",),
                     ).fetchall()
                     result["records"] = [
-                        _row_audit(db, slug, city, row, year, mode) for row in rows
+                        _row_audit(
+                            db, slug, city, row, year, mode,
+                            provenance.get(row["source_id"]) if mode == "dresden" else None,
+                        ) for row in rows
                     ]
                     result["municipal_review_candidates"] = [
                         row for row in result["records"] if row["municipal_review_candidate"]
@@ -231,7 +276,7 @@ def audit_city(
                     result["source_verified"] = bool(rows) and all(
                         row["source_verified"] for row in result["records"]
                     )
-                    if slug == "nuremberg" and mode == "offline":
+                    if mode == "offline":
                         result["blocking_reasons"].append("offline_stage_unverified")
         except sqlite3.DatabaseError:
             result["records"] = []

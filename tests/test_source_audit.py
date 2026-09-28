@@ -188,7 +188,7 @@ def test_offline_records_remain_unverified_even_if_mutable_flag_changes(tmp_path
     assert not result["source_verified"]
     assert not result["publication_ready"]
     assert (
-        "live_source_access_blocked" if slug == "dresden" else "offline_stage_unverified"
+        "offline_stage_unverified"
     ) in result["blocking_reasons"]
 
 

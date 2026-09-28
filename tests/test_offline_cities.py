@@ -1,6 +1,7 @@
 import hashlib
 import json
 
+import httpx
 import pytest
 
 from crimemapsde_cities_11_14 import dresden, nuremberg, nuremberg_newsroom
@@ -91,9 +92,66 @@ def test_offline_adapter_rejects_wrong_origin(tmp_path, module, record):
         module.stage_file(tmp_path / "staged.sqlite", source)
 
 
-def test_dresden_live_crawl_remains_disabled():
-    with pytest.raises(RuntimeError, match="live crawl disabled"):
-        dresden.live_sync()
+def _dresden_landing():
+    return """<html><body>Polizeidirektion Dresden
+    <input value="2026-09-28 17:59:06 UTC" type="hidden"
+     name="search[first_searched]" id="search_first_searched" /></body></html>"""
+
+
+def _dresden_article(source_id="1100218", publisher="Polizeidirektion Dresden"):
+    return f"""<html><head><meta name="date" content="2019-01-01" />
+    <meta name="author" content="Referat Kommunikation" />
+    <meta name="id" content="{source_id}" />
+    <meta name="url" content="{dresden.ORIGIN}/medien/news/{source_id}" />
+    <meta name="title" content="Mehrere Meldungen" />
+    <meta name="date" content="28.09.2026 15:21" />
+    <meta name="author" content="{publisher}" /></head><body>
+    <h1 id="page-title">Mehrere Meldungen</h1><div class="row content-row">
+    <div class="content-col-wide"><div class="row"><h2>Medieninformation Nr. 501|26</h2>
+    <div class="col"><h3>Erster Sachverhalt</h3><p>Ort: Dresden<br />Zeit: Sonntag</p>
+    <p>Ein vollständiger synthetischer Polizeibericht für die Quellenprüfung.</p></div></div></div>
+    <div class="content-col-small">Kontakt und Navigation.</div></div></body></html>"""
+
+
+def test_dresden_live_public_archive_is_bounded_and_review_gated(tmp_path):
+    requested = []
+
+    def handler(request):
+        requested.append(request.url.path)
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404, request=request)
+        if request.url.path == "/medien/":
+            return httpx.Response(200, request=request, text=_dresden_landing())
+        if request.url.path == "/medien/news/search.json":
+            payload = {
+                "teaser": ['<a href="/medien/news/1100218">Meldung 1100218</a>'],
+                "disable": True,
+                "up_to_date": True,
+            }
+            return httpx.Response(200, request=request, json=payload)
+        if request.url.path == "/medien/news/1100218":
+            return httpx.Response(200, request=request, text=_dresden_article())
+        raise AssertionError(request.url)
+
+    path = tmp_path / "dresden-live.sqlite"
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        stats = dresden.live_sync(
+            path, 2026, max_pages=1, limit=2, client=client, sleeper=lambda _seconds: None
+        )
+    assert requested == ["/robots.txt", "/medien/", "/medien/news/search.json", "/medien/news/1100218"]
+    assert stats["robots_status"] == 404 and stats["new"] == 1 and stats["stored"] == 1
+    with connect(path) as db:
+        row = db.execute("SELECT * FROM reports").fetchone()
+        assert row["source_verified"] == 1 and row["city_scope"] == "needs_review"
+        assert row["review_status"] == "pending" and row["revision"] == 1
+        assert "Kontakt und Navigation" not in row["body"]
+        source = db.execute("SELECT * FROM sachsen_source_units").fetchone()
+        assert source["institution_id"] == "10997" and source["source_verified"] == 1
+    rows = review_rows(
+        path, publisher=dresden.PUBLISHER, validate_identity=dresden.validate_identity,
+        city_scope=dresden.city_scope,
+    )
+    assert len(rows) == 1 and rows[0]["source_verified"] is True
 
 
 def test_offline_stage_is_bounded_and_reports_extra_input(tmp_path):

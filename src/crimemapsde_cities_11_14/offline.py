@@ -188,6 +188,12 @@ def stage(
                         (row["source_id"], file_evidence["path"], file_sha,
                          file_evidence["format"], int(file_evidence["text_matches_file"])),
                     )
+                if db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sachsen_source_units'"
+                ).fetchone():
+                    db.execute(
+                        "DELETE FROM sachsen_source_units WHERE source_id=?", (row["source_id"],)
+                    )
                 db.commit()
                 stats[result] += 1
                 stats["processed"] += 1
@@ -222,23 +228,46 @@ def review_rows(
         has_evidence = db.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_evidence'"
         ).fetchone() is not None
+        has_online = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sachsen_source_units'"
+        ).fetchone() is not None
         rows = []
         seen = 0
         for row in db.execute("SELECT * FROM reports ORDER BY published,source_id"):
+            online = db.execute(
+                "SELECT * FROM sachsen_source_units WHERE source_id=?", (row["source_id"],)
+            ).fetchone() if has_online else None
             validate_identity(dict(row))
             if row["publisher"] != publisher:
-                raise ValueError("Offline publisher mismatch")
+                raise ValueError("Source publisher mismatch")
             _publication(row["published"])
             body = row["body"]
             if not isinstance(body, str) or hashlib.sha256(body.encode()).hexdigest() != row["sha256"]:
-                raise ValueError("Offline source body hash mismatch")
+                raise ValueError("Source body hash mismatch")
             revision = db.execute(
                 "SELECT sha256 FROM revisions WHERE source_id=? AND revision=?",
                 (row["source_id"], row["revision"]),
             ).fetchone()
             if revision is None or revision["sha256"] != row["sha256"]:
-                raise ValueError("Offline source revision hash mismatch")
-            if (row["city_scope"], row["scope_evidence"]) != city_scope(row["title"], body):
+                raise ValueError("Source revision hash mismatch")
+            if online:
+                canonical = hashlib.sha256(json.dumps(
+                    {
+                        "source_id": row["source_id"], "source_url": row["source_url"],
+                        "publisher": row["publisher"], "title": row["title"],
+                        "published": row["published"], "body": body,
+                    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                ).encode()).hexdigest()
+                if (online["publisher"] != publisher or online["institution_id"] != "10997"
+                        or online["record_type"] != "multi_event_bulletin"
+                        or not online["source_verified"] or not row["source_verified"]
+                        or online["source_sha256"] != canonical
+                        or not isinstance(online["raw_html_sha256"], str)
+                        or len(online["raw_html_sha256"]) != 64):
+                    raise ValueError("Online source provenance mismatch")
+                if row["city_scope"] != "needs_review" or row["review_status"] != "pending":
+                    raise ValueError("Online source bypassed the required semantic review gate")
+            elif (row["city_scope"], row["scope_evidence"]) != city_scope(row["title"], body):
                 raise ValueError("Offline city scope changed")
             file_row = db.execute(
                 "SELECT * FROM local_evidence WHERE source_id=?", (row["source_id"],)
@@ -259,8 +288,11 @@ def review_rows(
                 "source_file_text_matches": bool(file_row["text_matches_file"]) if file_row else None,
                 "source_file_path": file_row["path"] if file_row else None,
                 "city_scope": row["city_scope"], "scope_evidence": row["scope_evidence"],
-                "review_status": row["review_status"], "source_verified": False,
+                "review_status": row["review_status"], "source_verified": bool(online),
                 "publication_ready": False,
+                "record_type": online["record_type"] if online else "multi_event_bulletin",
+                "canonical_source_sha256": online["source_sha256"] if online else None,
+                "raw_html_sha256": online["raw_html_sha256"] if online else None,
             })
             if len(rows) >= limit:
                 break
