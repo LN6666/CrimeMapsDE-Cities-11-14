@@ -145,3 +145,81 @@ def test_robots_disallow_stops_before_newsroom(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="robots.txt disallows"):
         hannover.sync(tmp_path / "h.sqlite", 2026, pages=1, limit=1)
     assert requested == ["/robots.txt"]
+
+
+@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize("target", ["robots", "listing"])
+def test_first_source_status_stops_without_retry(tmp_path, monkeypatch, status, target):
+    requested = []
+
+    def respond(request):
+        requested.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(
+                status if target == "robots" else 200,
+                text="User-agent: *\nDisallow: /images/\n",
+            )
+        return httpx.Response(status, text="unavailable")
+
+    real_client = httpx.Client
+    monkeypatch.setattr(hannover.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        hannover.httpx, "Client", lambda **kw: real_client(transport=httpx.MockTransport(respond), **kw)
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        hannover.sync(tmp_path / "stopped.sqlite", 2026, pages=1, limit=1)
+    assert requested == (
+        [hannover.ORIGIN + "/robots.txt"]
+        if target == "robots" else [hannover.ORIGIN + "/robots.txt", hannover.NEWSROOM]
+    )
+
+
+@pytest.mark.parametrize("status", [429, 503, 200])
+def test_first_article_error_stops_batch_and_preserves_pending(tmp_path, monkeypatch, status):
+    requested = []
+    first_url = hannover.ORIGIN + "/blaulicht/pm/66841/6359329"
+    second_url = hannover.ORIGIN + "/blaulicht/pm/66841/6359328"
+    listing = LISTING + (
+        '<article class="news" data-label="6359328"><div class="date">'
+        '24.09.2026 &ndash; 14:08</div><h3 class="news-headline-clamp">'
+        '<a href="/blaulicht/pm/66841/6359328">POL-H: Zweite synthetische Meldung</a>'
+        '</h3></article>'
+    )
+
+    def respond(request):
+        requested.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nDisallow: /images/\n")
+        if request.url.path == "/blaulicht/nr/66841":
+            return httpx.Response(200, text=listing)
+        if request.url.path == "/blaulicht/pm/66841/6359329":
+            return httpx.Response(
+                status,
+                text=ARTICLE.replace("<a>Polizeidirektion Hannover</a>", "<a>Andere Behörde</a>")
+                if status == 200 else "unavailable",
+            )
+        if request.url.path == "/blaulicht/pm/66841/6359328":
+            return httpx.Response(200, text=ARTICLE)
+        raise AssertionError(request.url)
+
+    real_client = httpx.Client
+    monkeypatch.setattr(hannover.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        hannover.httpx, "Client", lambda **kw: real_client(transport=httpx.MockTransport(respond), **kw)
+    )
+    path = tmp_path / "articles.sqlite"
+    result = hannover.sync(path, 2026, pages=1, limit=2)
+    assert result["failed"] == 1 and result["pending"] == 2
+    assert result["stopped_on_source_error"] == {
+        "source_id": "6359329",
+        "http_status": None if status == 200 else status,
+        "error_type": "ValueError" if status == 200 else "HTTPStatusError",
+    }
+    assert requested.count(first_url) == 1
+    assert second_url not in requested
+    db = hannover.connect(path)
+    first = db.execute("SELECT body,failures,error FROM reports WHERE id='6359329'").fetchone()
+    second = db.execute("SELECT body,error FROM reports WHERE id='6359328'").fetchone()
+    assert first["body"] is None and first["failures"] == 1 and first["error"]
+    assert second["body"] is None and second["error"] is None
+    db.close()
