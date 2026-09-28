@@ -11,6 +11,19 @@
 
 柏林仍是第一组 `CrimeMapsBerlin` 的默认入口。本仓库没有城市地图、坐标或可发布数据。仓库名称中的 11–14 是城市组编号，不表示覆盖或完成进度。
 
+## 当前本地来源状态
+
+2026-09-29 的 Git 忽略检查点如下。数量表示已发现公告／已保存正文，不表示市域案件数或地图完成度：
+
+| 城市 | 当前检查点 | 仍待处理 |
+| --- | ---: | --- |
+| Essen | 20 / 4 | 16 篇正文、年度遍历、市域与逐篇语义复核 |
+| Dresden | 0 / 0 | 等待官方投递或人工保存的 HTML、EML、完整 RSS/Atom XML、PDF 原件；PDF 转写须人工核对 |
+| Hannover | 470 / 334 | 警方链接新闻室的 2026 列表遍历已跨入 2025；136 篇正文和全部 470 篇市域／语义复核仍待处理 |
+| Nuremberg | 849 / 849 | 警方署名 Presseportal 新闻室的 2026 遍历已完成；仍需 Mittelfranken 市域筛选、多场景复核与所有者批准 |
+
+纽伦堡的 169 条基线输入和 680 条差量输入 source ID 零重叠，合并覆盖 849 条。这里的完成仅指该警方署名分发通道；巴伐利亚警方原生档案受 robots 限制，不能据此声称原生档案或纽伦堡地图完成。所有检查点、原文和生成数据均保持 Git 忽略。
+
 ## 埃森来源与边界
 
 采集器从[Polizei Essen 原生公告档案](https://essen.polizei.nrw/presse/pressemitteilungen)读取分页索引和原文，每次运行先核验 [robots.txt](https://essen.polizei.nrw/robots.txt)，按至少一秒间隔请求；首次来源或解析错误即停止本批次，不自动重试。原生文章的 Drupal 节点 ID、规范 URL、发布时间、正文、SHA-256、修订号和待审状态保存在本地 SQLite。抓取过程不推断地点，也不制作公共地图。
@@ -21,7 +34,7 @@
 
 ## 汉诺威来源与边界
 
-[Polizeidirektion Hannover 的新闻办公室](https://www.pd-h.polizei-nds.de/wir_ueber_uns/presse/)明确链接其[Presseportal 新闻室](https://www.presseportal.de/blaulicht/nr/66841)。采集器先核验 Presseportal 的 [robots.txt](https://www.presseportal.de/robots.txt)，再按有界页数读取索引和正文；SQLite 保存新闻室文章 ID、URL、原文哈希、修订与待审状态。年度断点扫描会在续扫时刷新新闻室首页；`--pages` 指续扫页数，实际索引请求最多多一页首页。2026-09-28 的单页试跑发现 30 条、保存 1 篇；这只是断点，不是年度完成量。
+[Polizeidirektion Hannover 的新闻办公室](https://www.pd-h.polizei-nds.de/wir_ueber_uns/presse/)明确链接其[Presseportal 新闻室](https://www.presseportal.de/blaulicht/nr/66841)。采集器先核验 Presseportal 的 [robots.txt](https://www.presseportal.de/robots.txt)，再按有界页数读取索引和正文；SQLite 保存新闻室文章 ID、URL、原文哈希、修订与待审状态。年度断点扫描会在续扫时刷新新闻室首页；`--pages` 指续扫页数，实际索引请求最多多一页首页。当前列表遍历已经跨入 2025，2026 新闻室通道发现 470 条；正文仍按限速、有界批次回补，不能把列表完成等同于市域审核或地图完成。
 
 新闻室包含 Langenhagen、Lehrte、Burgwedel 等周边地点及高速公路。`hannover_candidate` 只是市域复核线索；含其他市镇或跨市道路的记录保持待核验，不自动进入汉诺威地图。新闻室首页地点标签和 `Hannover (ots)` 发稿地不作为案发地点证据。
 
