@@ -29,9 +29,7 @@ ARTICLE_PATH = re.compile(r"/presse/[a-z0-9][a-z0-9-]*$")
 NODE_ID = re.compile(r'"currentPath":"node\\?/+(\d+)"')
 CANONICAL = re.compile(r'<link\s+rel="canonical"\s+href="([^"]+)"')
 NEXT_PAGE = re.compile(r'href="\?[^"]*?\bpage=(\d+)"[^>]*title="Zur nächsten Seite"')
-ARTICLE = re.compile(
-    r'<article\s+about="([^"]+)"[^>]*node--type--press-release[^>]*>.*?</article>', re.DOTALL
-)
+VOID_TAGS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"})
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS reports (
  source_url TEXT PRIMARY KEY,
@@ -158,23 +156,43 @@ def next_archive_page(page: str) -> int | None:
 
 
 class ArticleParser(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, expected_path: str) -> None:
         super().__init__(convert_charrefs=True)
-        self.depth = 0
-        self.body_depth = None
-        self.author_depth = None
+        self.expected_path = expected_path
+        self.stack: list[str] = []
+        self.target_depth: int | None = None
+        self.body_depth: int | None = None
+        self.author_depth: int | None = None
+        self.found_target = False
         self.author: list[str] = []
         self.parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag != "div":
-            return
-        self.depth += 1
-        classes = (dict(attrs).get("class") or "").split()
-        if "field--name-body" in classes:
-            self.body_depth = self.depth
-        elif "field--name-field-press-release-author" in classes:
-            self.author_depth = self.depth
+        tag = tag.casefold()
+        attrs_by_name = dict(attrs)
+        if tag not in VOID_TAGS:
+            self.stack.append(tag)
+        depth = len(self.stack)
+        classes = (attrs_by_name.get("class") or "").split()
+        if (
+            tag == "article"
+            and self.target_depth is None
+            and attrs_by_name.get("about") == self.expected_path
+            and "node--type--press-release" in classes
+        ):
+            self.target_depth = depth
+            self.found_target = True
+        inside_nested_article = bool(
+            self.target_depth is not None
+            and any(item == "article" for item in self.stack[self.target_depth :])
+        )
+        if tag == "div" and self.target_depth is not None and not inside_nested_article:
+            if "field--name-body" in classes:
+                self.body_depth = depth
+            elif "field--name-field-press-release-author" in classes:
+                self.author_depth = depth
+        if self.body_depth is not None and tag == "br":
+            self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
         if self.body_depth is not None:
@@ -183,18 +201,26 @@ class ArticleParser(HTMLParser):
             self.author.append(data)
 
     def handle_endtag(self, tag: str) -> None:
+        tag = tag.casefold()
+        if tag in VOID_TAGS:
+            return
+        depth = len(self.stack)
         if self.body_depth is not None and tag in {"p", "li", "br"}:
             self.parts.append("\n")
         if tag == "div":
-            if self.depth == self.body_depth:
+            if depth == self.body_depth:
                 self.body_depth = None
-            if self.depth == self.author_depth:
+            if depth == self.author_depth:
                 self.author_depth = None
-            self.depth -= 1
+        if tag == "article" and depth == self.target_depth:
+            self.target_depth = None
+        if self.stack:
+            self.stack.pop()
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if self.body_depth is not None and tag == "br":
-            self.parts.append("\n")
+        self.handle_starttag(tag, attrs)
+        if tag.casefold() not in VOID_TAGS:
+            self.handle_endtag(tag)
 
 
 def article_record(page: str, requested_url: str) -> dict:
@@ -205,11 +231,10 @@ def article_record(page: str, requested_url: str) -> dict:
     url = _article_url(canonical[1])
     if url != requested_url:
         raise ValueError("Native Essen canonical URL differs from fetched URL")
-    article = ARTICLE.search(page)
-    if not article or article[1] != urlparse(url).path:
+    parser = ArticleParser(urlparse(url).path)
+    parser.feed(page)
+    if not parser.found_target:
         raise ValueError("Native Essen press-release article container missing")
-    parser = ArticleParser()
-    parser.feed(article[0])
     body = "\n".join(_text(part) for part in "".join(parser.parts).splitlines() if _text(part))
     if _text("".join(parser.author)) != "Polizei Essen" or len(body) < 30:
         raise ValueError("Native Essen publisher or body check failed")

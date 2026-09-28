@@ -14,6 +14,9 @@ LISTING = """<div class="view view-list-view-press-releases-solr"><div class="vi
 
 ARTICLE = r"""<link rel="canonical" href="https://essen.polizei.nrw/presse/essen-fall" />
 <article about="/presse/essen-fall" class="node node--type--press-release node--view-mode-full">
+<article about="/medien/testbild" class="node node--type-image">
+<div class="field field--name-body"><p>Bildbeschreibung außerhalb des Meldungstextes.</p></div>
+</article>
 <div class="field field--name-field-press-release-author">Polizei Essen</div>
 <div class="field field--name-body"><p>Essen-Nordviertel:</p>
 <p>Am Samstag ereignete sich ein Überfall am Nordplatz.</p><p>Zeugen werden gesucht.</p></div>
@@ -40,6 +43,7 @@ def test_article_uses_native_node_id_and_excludes_sidebar():
     assert record["source_id"] == "217129"
     assert "Überfall am Nordplatz" in record["body"]
     assert "Falschestraße" not in record["body"]
+    assert "Bildbeschreibung" not in record["body"]
     with pytest.raises(ValueError, match="publisher"):
         essen.article_record(ARTICLE.replace(">Polizei Essen</div>", ">Andere Behörde</div>"), url)
     with pytest.raises(ValueError, match="canonical URL"):
