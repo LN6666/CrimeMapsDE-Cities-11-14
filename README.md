@@ -5,11 +5,11 @@
 | 编号 | 城市 | slug | 当前状态 |
 | --- | --- | --- | --- |
 | 11 | Essen（埃森） | `essen` | 警方原生公告采集器；未发布地图 |
-| 12 | Dresden（德累斯顿） | `dresden` | 尚未启动 |
-| 13 | Hannover（汉诺威） | `hannover` | 尚未启动 |
-| 14 | Nuremberg（纽伦堡） | `nuremberg` | 尚未启动 |
+| 12 | Dresden（德累斯顿） | `dresden` | 官方来源已核对；仅离线待核验暂存 |
+| 13 | Hannover（汉诺威） | `hannover` | 警方链接的新闻室有界采集；未发布地图 |
+| 14 | Nuremberg（纽伦堡） | `nuremberg` | 官方来源已核对；仅离线待核验暂存 |
 
-柏林仍是第一组 `CrimeMapsBerlin` 的默认入口。本仓库目前只有埃森的来源采集和合成测试，没有城市地图、坐标或可发布数据。仓库名称中的 11–14 是城市组编号，不表示覆盖或完成进度。
+柏林仍是第一组 `CrimeMapsBerlin` 的默认入口。本仓库没有城市地图、坐标或可发布数据。仓库名称中的 11–14 是城市组编号，不表示覆盖或完成进度。
 
 ## 埃森来源与边界
 
@@ -18,6 +18,20 @@
 警方署名公告可能涉及 Mülheim an der Ruhr、Oberhausen 和跨市高速路。`city_scope` 只提供保守的市域复核线索；发布机关、邮编或新闻室标签均不能证明案发地在 Essen。多地点、混合辖区、高速与不明确地点进入 `needs_review`。每篇公告仍须逐条对照官方原文接受 Codex 审查，再交项目所有者检查、质问和批准；缺失、过期或不确定的审查阻止发布。
 
 2026-09-28 的有限核对中，原生档案的 2026 年筛选显示 401 条，[Polizei Essen 署名新闻室](https://www.presseportal.de/blaulicht/nr/11562)显示 418 条。两处数量不同，原因尚未核实；这里不宣称完整年度覆盖。警方公告本身也不是全量犯罪记录。
+
+## 汉诺威来源与边界
+
+[Polizeidirektion Hannover 的新闻办公室](https://www.pd-h.polizei-nds.de/wir_ueber_uns/presse/)明确链接其[Presseportal 新闻室](https://www.presseportal.de/blaulicht/nr/66841)。采集器先核验 Presseportal 的 [robots.txt](https://www.presseportal.de/robots.txt)，再按有界页数读取索引和正文；SQLite 保存新闻室文章 ID、URL、原文哈希、修订与待审状态。年度断点扫描会在续扫时刷新新闻室首页；`--pages` 指续扫页数，实际索引请求最多多一页首页。2026-09-28 的单页试跑发现 30 条、保存 1 篇；这只是断点，不是年度完成量。
+
+新闻室包含 Langenhagen、Lehrte、Burgwedel 等周边地点及高速公路。`hannover_candidate` 只是市域复核线索；含其他市镇或跨市道路的记录保持待核验，不自动进入汉诺威地图。新闻室首页地点标签和 `Hannover (ots)` 发稿地不作为案发地点证据。
+
+## 德累斯顿、纽伦堡来源限制
+
+[Polizei Sachsen 档案](https://www.polizei.sachsen.de/de/113164.htm)明确指向[Polizeidirektion Dresden 的 Medienservice 档案](https://medienservice.sachsen.de/medien/?search%5Binstitution_ids%5D%5B%5D=10997)。核验时 Medienservice 的 robots.txt 返回 404，无法取得可验证规则，因此没有自动抓取。其公告可能把 Dresden、Meißen、Sächsische Schweiz-Osterzgebirge 多个事件合并成一篇；不能把整篇公告当作一个市内案发点。
+
+[巴伐利亚警方原生公告](https://www.polizei.bayern.de/aktuelles/pressemitteilungen/)包含纽伦堡和整个 Mittelfranken 的记录，但其 [robots.txt](https://www.polizei.bayern.de/robots.txt) 对自动访问标明 `Disallow: /`。本仓库不绕过该限制，也未把第三方新闻室当成完整替代档案。
+
+两城模块目前只能将**事先人工取得并放在本机的官方原文**以 JSONL 形式离线暂存：每行必须有 `source_id`、`source_url`、`publisher`、`title`、`published`、`body`，URL 与 ID 须符合各自官方站点。暂存过程不联网，写入 `source_verified=0` 和 `review_status=pending`；字段校验不等于核验原文。市域标记仅是复核线索。来源核验、逐篇 Codex 审查、所有者质询与批准之前，不能发布这些记录。
 
 ## 本地运行
 
@@ -29,9 +43,14 @@ uv run ruff check .
 uv run pytest -q
 # 有界的原生来源试跑：最多 1 页索引、1 篇正文
 PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.essen --year 2026 --max-pages 1 --limit 1
+# 汉诺威新闻室：单次续扫最多 1 页、下载最多 1 篇正文
+PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.hannover --year 2026 --pages 1 --limit 1
+# 仅当人工已有官方原文 JSONL 时，才运行离线暂存：
+PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.dresden --input .runtime/safety/cities/dresden/source.jsonl
+PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.nuremberg --input .runtime/safety/cities/nuremberg/source.jsonl
 ```
 
-默认数据库在 `.runtime/safety/cities/essen/police.sqlite`。`--full` 会在多次运行间记录年档案页码；`--max-pages` 和 `--limit` 只限制**一次网络采集运行**的请求量，并非三天审查篇数或发布时间表。再次运行可从本地断点继续。来源失效时保持上次已保存的原文和修订，不生成替代数据。
+各城市的默认数据库在 `.runtime/safety/cities/<slug>/police.sqlite`。埃森 `--full` 与汉诺威年度续扫会在多次运行间记录档案页码；`--max-pages`、`--pages`、`--limit` 只限制**一次网络采集运行**的请求量，并非三天审查篇数或发布时间表。再次运行可从本地断点继续。来源失效时保持上次已保存的原文和修订，不生成替代数据。
 
 `.runtime/`、原始公告、SQLite、下载缓存、生成城市数据、个人凭据均不进入 Git。CI 只运行合成测试，不向警方网站发请求。任何获准的公共数据版本应先完成来源审查、质量检查和所有者批准，并遵循第一组仓库的发布流程。
 
