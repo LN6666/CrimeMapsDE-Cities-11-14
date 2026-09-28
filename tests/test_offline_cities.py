@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from crimemapsde_cities_11_14 import dresden, nuremberg
+from crimemapsde_cities_11_14 import dresden, nuremberg, nuremberg_newsroom
 from crimemapsde_cities_11_14.offline import connect
 
 
@@ -83,13 +83,16 @@ def test_nuremberg_mixed_municipality_and_motorway_stay_uncertain():
 
 
 @pytest.mark.parametrize("module,record", [(dresden, DRESDEN), (nuremberg, NUREMBERG)])
-def test_offline_adapter_rejects_wrong_origin_and_live_crawl(tmp_path, module, record):
+def test_offline_adapter_rejects_wrong_origin(tmp_path, module, record):
     source = tmp_path / "local-source.jsonl"
     _write(source, [{**record, "source_url": "https://untrusted.example/medien/news/1100218"}])
     with pytest.raises(ValueError, match="source ID/URL"):
         module.stage_file(tmp_path / "staged.sqlite", source)
+
+
+def test_dresden_live_crawl_remains_disabled():
     with pytest.raises(RuntimeError, match="live crawl disabled"):
-        module.live_sync()
+        dresden.live_sync()
 
 
 def test_offline_stage_is_bounded_and_reports_extra_input(tmp_path):
@@ -108,3 +111,16 @@ def test_offline_stage_is_bounded_and_reports_extra_input(tmp_path):
     stats = dresden.stage_file(tmp_path / "staged.sqlite", source, max_records=1)
     assert stats["processed"] == 1
     assert stats["truncated_input"] is True
+
+
+def test_nuremberg_online_and_offline_databases_cannot_be_mixed(tmp_path):
+    source = tmp_path / "local-source.jsonl"
+    _write(source, [NUREMBERG])
+    offline_db = tmp_path / "police.sqlite"
+    assert nuremberg.stage_file(offline_db, source)["new"] == 1
+    with pytest.raises(ValueError, match="own SQLite"):
+        nuremberg_newsroom.connect(offline_db)
+    online_db = tmp_path / "newsroom.sqlite"
+    nuremberg_newsroom.connect(online_db).close()
+    with pytest.raises(ValueError, match="own SQLite"):
+        nuremberg.stage_file(online_db, source)

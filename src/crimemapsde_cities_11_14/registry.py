@@ -51,9 +51,9 @@ CITIES = {
         "nuremberg",
         "Nuremberg",
         25832,
-        "police_native_archive",
-        "https://www.polizei.bayern.de/aktuelles/pressemitteilungen/",
-        "offline",
+        "police_authored_newsroom",
+        "https://www.presseportal.de/blaulicht/nr/6013",
+        "online",
         "nuremberg_candidate",
     ),
 }

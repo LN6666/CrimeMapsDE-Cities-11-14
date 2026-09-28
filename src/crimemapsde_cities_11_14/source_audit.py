@@ -15,7 +15,7 @@ from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import dresden, essen, hannover, nuremberg
+from . import dresden, essen, hannover, nuremberg, nuremberg_newsroom
 from .registry import CITIES, CitySource
 
 DEFAULT_RUNTIME_ROOT = Path(".runtime/safety/cities")
@@ -23,6 +23,7 @@ SCHEMA_VERSION = 1
 REPORT_COLUMNS = {
     "essen": {"source_id", "source_url", "title", "published", "body", "sha256", "revision", "city_scope", "scope_evidence", "review_status"},
     "hannover": {"id", "url", "title", "published", "body", "sha256", "revision", "city_scope", "scope_evidence", "review_status"},
+    "nuremberg_newsroom": {"id", "url", "title", "published", "body", "sha256", "revision", "city_scope", "scope_evidence", "review_status"},
     "offline": {"source_id", "source_url", "title", "published", "body", "sha256", "revision", "city_scope", "scope_evidence", "source_verified", "review_status"},
 }
 REVISION_COLUMNS = {"revision", "sha256"}
@@ -45,15 +46,18 @@ def _valid_date(value: object, year: int) -> bool:
     return True
 
 
-def _valid_identity(slug: str, ident: object, url: object) -> bool:
+def _valid_identity(slug: str, ident: object, url: object, mode: str) -> bool:
     if not isinstance(ident, str) or not ident.isdecimal() or not isinstance(url, str):
         return False
     try:
         if slug == "essen":
             return essen._article_url(url) == url
-        if slug == "hannover":
+        if mode in {"hannover", "nuremberg_newsroom"}:
             parsed = urlparse(url)
-            match = hannover.ARTICLE_PATH.fullmatch(parsed.path)
+            article_path = (
+                hannover.ARTICLE_PATH if mode == "hannover" else nuremberg_newsroom.ARTICLE_PATH
+            )
+            match = article_path.fullmatch(parsed.path)
             return (
                 (parsed.scheme, parsed.netloc) == ("https", "www.presseportal.de")
                 and not parsed.query
@@ -68,10 +72,13 @@ def _valid_identity(slug: str, ident: object, url: object) -> bool:
     return True
 
 
-def _row_audit(db: sqlite3.Connection, slug: str, city: CitySource, row: sqlite3.Row, year: int) -> dict:
-    online = city.collection_mode == "online"
-    ident = row["source_id"] if slug != "hannover" else row["id"]
-    url = row["source_url"] if slug != "hannover" else row["url"]
+def _row_audit(
+    db: sqlite3.Connection, slug: str, city: CitySource, row: sqlite3.Row, year: int, mode: str
+) -> dict:
+    online = mode != "offline"
+    newsroom = mode in {"hannover", "nuremberg_newsroom"}
+    ident = row["id"] if newsroom else row["source_id"]
+    url = row["url"] if newsroom else row["source_url"]
     body = row["body"]
     digest = row["sha256"]
     revision = row["revision"]
@@ -84,13 +91,13 @@ def _row_audit(db: sqlite3.Connection, slug: str, city: CitySource, row: sqlite3
     )
     revision_valid = False
     if hash_valid and isinstance(revision, int) and revision > 0 and isinstance(ident, str):
-        revision_id = "id" if slug == "hannover" else "source_id"
+        revision_id = "id" if newsroom else "source_id"
         saved = db.execute(
             f"SELECT sha256 FROM revisions WHERE {revision_id}=? AND revision=?",
             (ident, revision),
         ).fetchone()
         revision_valid = saved is not None and saved["sha256"] == digest
-    identity_valid = _valid_identity(slug, ident, url)
+    identity_valid = _valid_identity(slug, ident, url, mode)
     scope_valid = False
     if has_body and isinstance(row["title"], str):
         expected_scope, expected_evidence = {
@@ -166,7 +173,14 @@ def audit_city(
         raise ValueError("Year must be 2000–2100")
     city = CITIES[slug]
     result = _base(slug, year)
-    path = Path(db_path) if db_path is not None else Path(runtime_root) / slug / "police.sqlite"
+    if db_path is not None:
+        path = Path(db_path)
+    elif slug == "nuremberg":
+        newsroom_path = Path(runtime_root) / slug / "newsroom.sqlite"
+        staged_path = Path(runtime_root) / slug / "police.sqlite"
+        path = newsroom_path if newsroom_path.is_file() or not staged_path.is_file() else staged_path
+    else:
+        path = Path(runtime_root) / slug / "police.sqlite"
     if not path.is_file():
         result["blocking_reasons"].append("source_db_missing")
     else:
@@ -174,43 +188,61 @@ def audit_city(
             with sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
                 db.execute("PRAGMA query_only=ON")
-                mode = city.collection_mode if city.collection_mode == "offline" else slug
+                report_columns = _columns(db, "reports")
+                if slug == "nuremberg":
+                    if REPORT_COLUMNS["nuremberg_newsroom"] <= report_columns:
+                        mode = "nuremberg_newsroom"
+                    elif REPORT_COLUMNS["offline"] <= report_columns:
+                        mode = "offline"
+                    else:
+                        mode = "nuremberg_newsroom"
+                else:
+                    mode = "offline" if city.collection_mode == "offline" else slug
                 required = REPORT_COLUMNS[mode]
-                revisions = REVISION_COLUMNS | ({"id"} if slug == "hannover" else {"source_id"})
+                newsroom = mode in {"hannover", "nuremberg_newsroom"}
+                revisions = REVISION_COLUMNS | ({"id"} if newsroom else {"source_id"})
                 cursor_table = "archive_scan" if slug == "essen" else "archive_cursor"
                 if (
-                    not required <= _columns(db, "reports")
+                    not required <= report_columns
                     or not revisions <= _columns(db, "revisions")
                     or (
-                        city.collection_mode == "online"
+                        mode != "offline"
                         and not {"year", "complete"} <= _columns(db, cursor_table)
                     )
                 ):
                     result["blocking_reasons"].append("source_schema_incompatible")
                 else:
-                    if city.collection_mode == "online":
+                    if mode != "offline":
                         scan = db.execute(
                             f"SELECT complete FROM {cursor_table} WHERE year=?", (year,)
                         ).fetchone()
-                        result["archive_complete"] = scan is not None and scan["complete"] == 1
+                        if slug != "nuremberg":
+                            result["archive_complete"] = scan is not None and scan["complete"] == 1
                     rows = db.execute(
                         "SELECT * FROM reports WHERE published LIKE ? ORDER BY published, rowid",
                         (f"{year:04d}-%",),
                     ).fetchall()
-                    result["records"] = [_row_audit(db, slug, city, row, year) for row in rows]
+                    result["records"] = [
+                        _row_audit(db, slug, city, row, year, mode) for row in rows
+                    ]
                     result["municipal_review_candidates"] = [
                         row for row in result["records"] if row["municipal_review_candidate"]
                     ]
                     result["source_verified"] = bool(rows) and all(
                         row["source_verified"] for row in result["records"]
                     )
+                    if slug == "nuremberg" and mode == "offline":
+                        result["blocking_reasons"].append("offline_stage_unverified")
         except sqlite3.DatabaseError:
             result["records"] = []
             result["municipal_review_candidates"] = []
             result["archive_complete"] = False
             result["source_verified"] = False
             result["blocking_reasons"].append("source_db_unreadable")
-    if city.collection_mode == "offline":
+    if slug == "nuremberg":
+        result["blocking_reasons"].append("native_archive_robots_blocked")
+        result["blocking_reasons"].append("newsroom_coverage_unverified")
+    elif city.collection_mode == "offline":
         result["blocking_reasons"].append("live_source_access_blocked")
     if not result["archive_complete"]:
         result["blocking_reasons"].append("archive_completeness_unverified")

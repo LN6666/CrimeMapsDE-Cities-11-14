@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from crimemapsde_cities_11_14 import dresden, essen, hannover, nuremberg
+from crimemapsde_cities_11_14 import dresden, essen, hannover, nuremberg, nuremberg_newsroom
 from crimemapsde_cities_11_14.registry import CITIES
 from crimemapsde_cities_11_14.source_audit import audit_city, audit_group
 
@@ -15,6 +15,9 @@ ESSEN_BODY = (
 )
 HANNOVER_BODY = (
     "Hannover (ots) Hannover-Mitte. Ein erfundener Vorfall am Testplatz wurde gemeldet."
+)
+NUREMBERG_BODY = (
+    "Nürnberg (ots) In Nürnberg-Ziegelstein wurde ein erfundener Vorfall am Testplatz gemeldet."
 )
 
 
@@ -36,16 +39,19 @@ def _online_record(tmp_path, slug):
             2,
         )
     else:
-        db = hannover.connect(path)
+        module = hannover if slug == "hannover" else nuremberg_newsroom
+        publisher_id = "66841" if slug == "hannover" else "6013"
+        body = HANNOVER_BODY if slug == "hannover" else NUREMBERG_BODY
+        db = module.connect(path)
         listing = {
             "id": "6359329",
-            "url": "https://www.presseportal.de/blaulicht/pm/66841/6359329",
+            "url": f"https://www.presseportal.de/blaulicht/pm/{publisher_id}/6359329",
             "title": "Synthetischer Fall",
             "published": "2026-09-25T15:09:00",
             "district": "",
         }
-        hannover.discover(db, [listing], 1)
-        hannover.accept(db, listing["id"], HANNOVER_BODY, {}, 2)
+        module.discover(db, [listing], 1)
+        module.accept(db, listing["id"], body, {}, 2)
     db.close()
     return path
 
@@ -53,6 +59,8 @@ def _online_record(tmp_path, slug):
 def test_registry_is_stable_and_group_audit_does_not_create_databases(tmp_path):
     assert list(CITIES) == ["essen", "dresden", "hannover", "nuremberg"]
     assert [city.epsg for city in CITIES.values()] == [25832, 25833, 25832, 25832]
+    assert CITIES["nuremberg"].collection_mode == "online"
+    assert CITIES["nuremberg"].source_url.endswith("/blaulicht/nr/6013")
     result = audit_group(2026, runtime_root=tmp_path / "absent")
     assert result["schema_version"] == 1
     assert len(result["cities"]) == 4
@@ -65,7 +73,7 @@ def test_registry_is_stable_and_group_audit_does_not_create_databases(tmp_path):
         assert "source_db_missing" in city["blocking_reasons"]
 
 
-@pytest.mark.parametrize("slug", ["essen", "hannover"])
+@pytest.mark.parametrize("slug", ["essen", "hannover", "nuremberg"])
 def test_online_audit_exports_only_metadata_and_keeps_publication_blocked(tmp_path, slug):
     path = _online_record(tmp_path, slug)
     result = audit_city(slug, 2026, db_path=path)
@@ -84,6 +92,9 @@ def test_online_audit_exports_only_metadata_and_keeps_publication_blocked(tmp_pa
     assert not result["archive_complete"]
     assert result["source_verified"]
     assert not result["publication_ready"]
+    if slug == "nuremberg":
+        assert "native_archive_robots_blocked" in result["blocking_reasons"]
+        assert "newsroom_coverage_unverified" in result["blocking_reasons"]
     serialized = json.dumps(result, ensure_ascii=False)
     assert "erfundener" not in serialized
     assert "Testplatz" not in serialized
@@ -176,7 +187,55 @@ def test_offline_records_remain_unverified_even_if_mutable_flag_changes(tmp_path
     assert not result["archive_complete"]
     assert not result["source_verified"]
     assert not result["publication_ready"]
-    assert "live_source_access_blocked" in result["blocking_reasons"]
+    assert (
+        "live_source_access_blocked" if slug == "dresden" else "offline_stage_unverified"
+    ) in result["blocking_reasons"]
+
+
+def test_nuremberg_completed_newsroom_cursor_does_not_claim_native_archive_complete(tmp_path):
+    path = _online_record(tmp_path, "nuremberg")
+    db = nuremberg_newsroom.connect(path)
+    db.execute("INSERT INTO archive_cursor VALUES(2026,NULL,1,1,3)")
+    db.commit()
+    db.close()
+    result = audit_city("nuremberg", 2026, db_path=path)
+    assert len(result["municipal_review_candidates"]) == 1
+    assert result["source_verified"]
+    assert not result["archive_complete"]
+    assert not result["publication_ready"]
+
+
+def test_nuremberg_default_audit_prefers_newsroom_without_ignoring_legacy_stage(tmp_path):
+    root = tmp_path / "cities"
+    city_dir = root / "nuremberg"
+    city_dir.mkdir(parents=True)
+    staged = {
+        "source_id": "105982",
+        "source_url": "https://www.polizei.bayern.de/aktuelles/pressemitteilungen/105982/index.html",
+        "publisher": "Polizeipräsidium Mittelfranken",
+        "title": "Synthetische Meldung",
+        "published": "2026-07-19",
+        "body": "NÜRNBERG. Ein erfundener Vorfall am Testplatz. Die Polizei sucht Zeugen.",
+    }
+    source = tmp_path / "staged.jsonl"
+    source.write_text(json.dumps(staged, ensure_ascii=False) + "\n")
+    nuremberg.stage_file(city_dir / "police.sqlite", source)
+    offline_result = audit_city("nuremberg", 2026, runtime_root=root)
+    assert offline_result["records"][0]["source_id"] == "105982"
+    assert not offline_result["source_verified"]
+
+    online_db = nuremberg_newsroom.connect(city_dir / "newsroom.sqlite")
+    row = {
+        "id": "6359329", "url": "https://www.presseportal.de/blaulicht/pm/6013/6359329",
+        "title": "Synthetische Meldung", "published": "2026-09-25T15:09:00", "district": "",
+    }
+    nuremberg_newsroom.discover(online_db, [row], 1)
+    nuremberg_newsroom.accept(online_db, row["id"], NUREMBERG_BODY, {}, 2)
+    online_db.close()
+    online_result = audit_city("nuremberg", 2026, runtime_root=root)
+    assert online_result["records"][0]["source_id"] == "6359329"
+    assert online_result["source_verified"]
+    assert not online_result["archive_complete"]
 
 
 def test_unknown_local_schema_fails_closed(tmp_path):
