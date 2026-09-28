@@ -31,6 +31,16 @@
 
 德累斯顿模块目前只能将**事先人工取得并放在本机的官方原文**以 JSONL 形式离线暂存：每行必须有 `source_id`、`source_url`、`publisher`、`title`、`published`、`body`。暂存过程不联网，写入 `source_verified=0` 和 `review_status=pending`；字段校验不等于核验原文。
 
+若来自 [Medienservice Sachsen 注册投递](https://www.medienservice.sachsen.de/medien/account/new/other)、用户保存的页面/PDF/邮件或官方人工导出，JSONL 行还可带相对路径 `source_file` 和原文件字节的 `source_file_sha256`。支持 HTML、EML、PDF、完整 RSS/Atom XML；HTML、邮件、RSS 的所填正文必须在原文件文字中，摘要不算完整公告。PDF 只校验签名与哈希，转写须在逐篇复核时与原 PDF 核对。保存文件改变会记录新修订并清除旧复核状态。账号凭据和所有原件仍只在本机 Git 忽略目录。
+
+```sh
+PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.dresden \
+  --db .runtime/safety/cities/dresden/police.sqlite \
+  --export-review .runtime/safety/cities/dresden/review-input.ndjson --max-records 100
+```
+
+此只读逐篇输入重新核对正文、修订、市域范围和原文件哈希，仍保留 `source_verified=false`、`publication_ready=false`。后续批次可用 `--review-offset` 分页并写不同的本地输出文件。它供 Codex 对照整篇原文拆案和场景，不能证明历史通报完整或自动进入地图。
+
 ## 纽伦堡来源与边界
 
 [巴伐利亚警方原生公告](https://www.polizei.bayern.de/aktuelles/pressemitteilungen/)受其 [robots.txt](https://www.polizei.bayern.de/robots.txt) 的 `Disallow: /` 阻挡，本仓库不请求原生站的索引或文章。[Presseportal 上由 Polizeipräsidium Mittelfranken 署名的新闻室](https://www.presseportal.de/blaulicht/nr/6013)提供另一条有界本地采集路径。2026-09-28 核验时，[Presseportal robots.txt](https://www.presseportal.de/robots.txt) 允许该新闻室及文章路径；程序每次运行重新核验规则，规则缺失、请求被禁止或发布者不符时停止接收相应内容。请求间隔至少一秒，并遵守 robots 的更慢限制；单次最多续扫 10 页、检查 30 篇正文，失败重试有上限。年度游标和原文存于本机 `.runtime/safety/cities/nuremberg/newsroom.sqlite`，保存新闻室 ID、规范 URL、正文 SHA-256、修订历史与待审状态。旧的巴伐利亚原生页面人工暂存仍单独保存在 `police.sqlite`，不与新闻室表混写。

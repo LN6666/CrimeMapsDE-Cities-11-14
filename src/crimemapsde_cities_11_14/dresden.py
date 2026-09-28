@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .offline import stage
+from .offline import review_rows, stage
 
 ARCHIVE = "https://medienservice.sachsen.de/medien/?search%5Binstitution_ids%5D%5B%5D=10997"
 PUBLISHER = "Polizeidirektion Dresden"
@@ -72,13 +72,34 @@ def stage_file(db_path: str | Path, input_path: str | Path, *, max_records: int 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--input", required=True, help="local JSONL copied from official source; no network fetch"
+        "--input", help="local JSONL copied from official source; no network fetch"
     )
+    parser.add_argument("--export-review", help="local NDJSON for source-first review")
     parser.add_argument("--db", default=".runtime/safety/cities/dresden/police.sqlite")
     parser.add_argument("--max-records", type=int, default=100)
+    parser.add_argument("--review-offset", type=int, default=0)
     args = parser.parse_args()
-    result = stage_file(args.db, args.input, max_records=args.max_records)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if not args.input and not args.export_review:
+        parser.error("Provide --input or --export-review")
+    if args.input:
+        result = stage_file(args.db, args.input, max_records=args.max_records)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.export_review:
+        output = Path(args.export_review)
+        if (output.suffix != ".ndjson" or output.resolve() == Path(args.db).resolve()
+                or (args.input and output.resolve() == Path(args.input).resolve())):
+            parser.error("Review output must be a distinct .ndjson file")
+        if not output.resolve().is_relative_to(Path.cwd().resolve() / ".runtime"):
+            parser.error("Review output must be under .runtime/")
+        rows = review_rows(
+            args.db, publisher=PUBLISHER, validate_identity=validate_identity,
+            city_scope=city_scope, limit=args.max_records, offset=args.review_offset,
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8"
+        )
+        print(json.dumps({"review_rows": len(rows), "output": str(output)}))
 
 
 if __name__ == "__main__":

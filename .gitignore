@@ -15,3 +15,7 @@ data/
 *.db
 *.db-*
 *.jsonl
+*.html
+*.pdf
+*.eml
+*.xml

@@ -15,6 +15,8 @@ from datetime import date, datetime
 from itertools import islice
 from pathlib import Path
 
+from .local_document import verify_local_document
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS reports (
  source_id TEXT PRIMARY KEY, source_url TEXT NOT NULL, publisher TEXT NOT NULL,
@@ -31,6 +33,10 @@ CREATE TABLE IF NOT EXISTS revisions (
 );
 CREATE TABLE IF NOT EXISTS runs (
  started REAL PRIMARY KEY, finished REAL, summary TEXT
+);
+CREATE TABLE IF NOT EXISTS local_evidence (
+ source_id TEXT PRIMARY KEY, path TEXT NOT NULL, sha256 TEXT NOT NULL,
+ format TEXT NOT NULL, text_matches_file INTEGER NOT NULL
 );
 """
 
@@ -72,6 +78,8 @@ def stage(
     """
     if not 1 <= max_records <= 1000:
         raise ValueError("Use 1–1000 local records per staging run")
+    if Path(input_path).stat().st_size > 20_000_000:
+        raise ValueError("Local JSONL input is too large")
     db = connect(db_path)
     started = time.time()
     stats = {"new": 0, "revised": 0, "unchanged": 0, "processed": 0, "truncated_input": False}
@@ -96,13 +104,26 @@ def stage(
                 body = "\n".join(
                     " ".join(part.split()) for part in str(row.get("body", "")).splitlines() if part.strip()
                 )
-                if len(title) < 3 or len(body) < 30:
+                if len(title) < 3 or not 30 <= len(body) <= 2_000_000:
                     raise ValueError(f"Missing title or body on JSONL line {line_number}")
+                file_evidence = None
+                if "source_file" in row or "source_file_sha256" in row:
+                    if not row.get("source_file") or not row.get("source_file_sha256"):
+                        raise ValueError(f"Local source file and SHA-256 required on line {line_number}")
+                    file_evidence = verify_local_document(
+                        row["source_file"], row["source_file_sha256"], row["body"],
+                        base_dir=Path(input_path).resolve().parent,
+                    )
                 published, precision = _publication(row.get("published"))
                 digest = hashlib.sha256(body.encode()).hexdigest()
                 scope, evidence = city_scope(title, body)
+                prior_evidence = db.execute(
+                    "SELECT sha256 FROM local_evidence WHERE source_id=?", (row["source_id"],)
+                ).fetchone()
+                prior_file_sha = prior_evidence["sha256"] if prior_evidence else None
+                file_sha = file_evidence["sha256"] if file_evidence else None
                 old = db.execute("SELECT * FROM reports WHERE source_id=?", (row["source_id"],)).fetchone()
-                changed = old is None or old["sha256"] != digest
+                changed = old is None or old["sha256"] != digest or prior_file_sha != file_sha
                 revision = (old["revision"] if old else 0) + int(changed)
                 now = time.time()
                 if old is None:
@@ -160,6 +181,13 @@ def stage(
                     db.execute(
                         "INSERT INTO revisions VALUES(?,?,?,?)", (row["source_id"], revision, digest, now)
                     )
+                db.execute("DELETE FROM local_evidence WHERE source_id=?", (row["source_id"],))
+                if file_evidence:
+                    db.execute(
+                        "INSERT INTO local_evidence VALUES(?,?,?,?,?)",
+                        (row["source_id"], file_evidence["path"], file_sha,
+                         file_evidence["format"], int(file_evidence["text_matches_file"])),
+                    )
                 db.commit()
                 stats[result] += 1
                 stats["processed"] += 1
@@ -174,3 +202,66 @@ def stage(
         db.commit()
         db.close()
     return stats
+
+
+def review_rows(
+    db_path: str | Path, *, publisher: str, validate_identity: Callable[[dict], None],
+    city_scope: Callable[[str, str], tuple[str, str]], limit: int = 100, offset: int = 0,
+) -> list[dict]:
+    """Return local source bodies for LLM review only after read-only integrity checks."""
+    if not 1 <= limit <= 200:
+        raise ValueError("Review limit must be 1–200")
+    if offset < 0:
+        raise ValueError("Review offset must be nonnegative")
+    path = Path(db_path)
+    if not path.is_file():
+        raise ValueError("Local source checkpoint is missing")
+    with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as db:
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA query_only=ON")
+        has_evidence = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_evidence'"
+        ).fetchone() is not None
+        rows = []
+        seen = 0
+        for row in db.execute("SELECT * FROM reports ORDER BY published,source_id"):
+            validate_identity(dict(row))
+            if row["publisher"] != publisher:
+                raise ValueError("Offline publisher mismatch")
+            _publication(row["published"])
+            body = row["body"]
+            if not isinstance(body, str) or hashlib.sha256(body.encode()).hexdigest() != row["sha256"]:
+                raise ValueError("Offline source body hash mismatch")
+            revision = db.execute(
+                "SELECT sha256 FROM revisions WHERE source_id=? AND revision=?",
+                (row["source_id"], row["revision"]),
+            ).fetchone()
+            if revision is None or revision["sha256"] != row["sha256"]:
+                raise ValueError("Offline source revision hash mismatch")
+            if (row["city_scope"], row["scope_evidence"]) != city_scope(row["title"], body):
+                raise ValueError("Offline city scope changed")
+            file_row = db.execute(
+                "SELECT * FROM local_evidence WHERE source_id=?", (row["source_id"],)
+            ).fetchone() if has_evidence else None
+            if file_row:
+                checked = verify_local_document(file_row["path"], file_row["sha256"], body)
+                if checked["format"] != file_row["format"] or int(checked["text_matches_file"]) != file_row["text_matches_file"]:
+                    raise ValueError("Offline local file metadata mismatch")
+            if seen < offset:
+                seen += 1
+                continue
+            rows.append({
+                "city": "dresden", "source_id": row["source_id"], "source_url": row["source_url"],
+                "published": row["published"], "title": row["title"], "source_body": body,
+                "source_sha256": row["sha256"], "revision": row["revision"],
+                "source_file_sha256": file_row["sha256"] if file_row else None,
+                "source_file_format": file_row["format"] if file_row else None,
+                "source_file_text_matches": bool(file_row["text_matches_file"]) if file_row else None,
+                "source_file_path": file_row["path"] if file_row else None,
+                "city_scope": row["city_scope"], "scope_evidence": row["scope_evidence"],
+                "review_status": row["review_status"], "source_verified": False,
+                "publication_ready": False,
+            })
+            if len(rows) >= limit:
+                break
+        return rows

@@ -1,9 +1,10 @@
+import hashlib
 import json
 
 import pytest
 
 from crimemapsde_cities_11_14 import dresden, nuremberg, nuremberg_newsroom
-from crimemapsde_cities_11_14.offline import connect
+from crimemapsde_cities_11_14.offline import connect, review_rows
 
 
 def _write(path, rows):
@@ -124,3 +125,54 @@ def test_nuremberg_online_and_offline_databases_cannot_be_mixed(tmp_path):
     nuremberg_newsroom.connect(online_db).close()
     with pytest.raises(ValueError, match="own SQLite"):
         nuremberg.stage_file(online_db, source)
+
+
+def test_dresden_saved_html_file_is_bound_to_read_only_review(tmp_path):
+    source = tmp_path / "saved.html"
+    source.write_text(f"<html><article>{DRESDEN['body']}</article></html>")
+    record = {
+        **DRESDEN, "source_file": "saved.html",
+        "source_file_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+    }
+    manifest = tmp_path / "source.jsonl"
+    _write(manifest, [record])
+    db_path = tmp_path / "dresden.sqlite"
+    assert dresden.stage_file(db_path, manifest)["new"] == 1
+    rows = review_rows(
+        db_path, publisher=dresden.PUBLISHER, validate_identity=dresden.validate_identity,
+        city_scope=dresden.city_scope,
+    )
+    assert len(rows) == 1
+    assert rows[0]["source_file_sha256"] == record["source_file_sha256"]
+    assert rows[0]["source_file_text_matches"] is True
+    assert rows[0]["city_scope"] == "dresden_candidate"
+    assert rows[0]["source_verified"] is False and rows[0]["publication_ready"] is False
+    source.write_text(source.read_text() + "<!-- changed -->")
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        review_rows(db_path, publisher=dresden.PUBLISHER,
+                    validate_identity=dresden.validate_identity, city_scope=dresden.city_scope)
+
+
+def test_dresden_pdf_change_resets_review_even_with_same_transcription(tmp_path):
+    pdf = tmp_path / "saved.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nfirst synthetic fixture\n%%EOF")
+    record = {
+        **DRESDEN, "source_file": "saved.pdf",
+        "source_file_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(),
+    }
+    manifest = tmp_path / "source.jsonl"
+    _write(manifest, [record])
+    db_path = tmp_path / "dresden.sqlite"
+    assert dresden.stage_file(db_path, manifest)["new"] == 1
+    with connect(db_path) as db:
+        db.execute("UPDATE reports SET review_status='supported'")
+        db.commit()
+    pdf.write_bytes(b"%PDF-1.4\nsecond synthetic fixture\n%%EOF")
+    record["source_file_sha256"] = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    _write(manifest, [record])
+    assert dresden.stage_file(db_path, manifest)["revised"] == 1
+    rows = review_rows(db_path, publisher=dresden.PUBLISHER,
+                       validate_identity=dresden.validate_identity, city_scope=dresden.city_scope)
+    assert rows[0]["revision"] == 2
+    assert rows[0]["review_status"] == "pending"
+    assert rows[0]["source_file_text_matches"] is False
