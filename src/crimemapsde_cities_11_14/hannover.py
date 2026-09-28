@@ -194,32 +194,12 @@ def next_url(page):
     return url
 
 
-INSIDE = re.compile(
-    r"\b(?:Hannover-[\wÄÖÜäöüß-]+|in Hannover(?:-[\wÄÖÜäöüß-]+)?|hannoverschen Innenstadt)\b", re.IGNORECASE
-)
-OUTSIDE = re.compile(
-    r"\b(?:Langenhagen|Lehrte|Altwarmbüchen|Burgwedel|Großburgwedel|Garbsen|Laatzen|"
-    r"Seelze|Wedemark|Sehnde|Gehrden|Uetze|Neustadt am Rübenberge|Osnabrück)\b",
-    re.IGNORECASE,
-)
-REGIONAL_ROAD = re.compile(r"\b(?:Autobahn|BAB\s*\d+|A\s*\d{1,3}|Bundesstraße|B\s*\d{1,3})\b", re.IGNORECASE)
+LLM_SCOPE_EVIDENCE = "full-text LLM municipality and scene review required"
 
 
-def city_scope(title: str, body: str) -> tuple[str, str]:
-    """A municipal review lead, never an incident-scene or publication decision."""
-    narrative = re.sub(r"^\s*Hannover\s*\(ots\)\s*[-–]\s*", "", body, flags=re.IGNORECASE)
-    narrative = re.sub(r"\b(?:Polizei|Polizeidirektion)\s+Hannover\b", "", narrative, flags=re.IGNORECASE)
-    if road := REGIONAL_ROAD.search(title + " " + narrative):
-        return "needs_review", f"regional road requires scene review: {road[0]}"
-    inside = INSIDE.search(title + " " + narrative)
-    outside = OUTSIDE.search(title + " " + narrative)
-    if inside and outside:
-        return "needs_review", f"mixed municipality mentions: {inside[0]}; {outside[0]}"
-    if outside:
-        return "outside_candidate", outside[0]
-    if inside:
-        return "hannover_candidate", inside[0]
-    return "needs_review", "no explicit Hannover scene evidence"
+def city_scope(_title: str, _body: str) -> tuple[str, str]:
+    """Return only the technical gate; the LLM must read and decide every report."""
+    return "needs_review", LLM_SCOPE_EVIDENCE
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
@@ -227,6 +207,12 @@ def connect(path: str | Path) -> sqlite3.Connection:
     db = sqlite3.connect(path)
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA)
+    db.execute(
+        """UPDATE reports SET city_scope='needs_review',scope_evidence=?,review_status='pending'
+           WHERE body IS NOT NULL AND (city_scope<>'needs_review' OR scope_evidence<>?)""",
+        (LLM_SCOPE_EVIDENCE, LLM_SCOPE_EVIDENCE),
+    )
+    db.commit()
     db.execute("PRAGMA journal_mode=WAL")
     return db
 

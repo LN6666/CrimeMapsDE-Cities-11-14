@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from .nuremberg import city_scope
+from .nuremberg import LLM_SCOPE_EVIDENCE, city_scope
 
 ORIGIN = "https://www.presseportal.de"
 NEWSROOM = ORIGIN + "/blaulicht/nr/6013"
@@ -213,6 +213,12 @@ def connect(path: str | Path) -> sqlite3.Connection:
         db.close()
         raise ValueError("Nuremberg newsroom needs its own SQLite database")
     db.executescript(SCHEMA)
+    db.execute(
+        """UPDATE reports SET city_scope='needs_review',scope_evidence=?,review_status='pending'
+           WHERE body IS NOT NULL AND (city_scope<>'needs_review' OR scope_evidence<>?)""",
+        (LLM_SCOPE_EVIDENCE, LLM_SCOPE_EVIDENCE),
+    )
+    db.commit()
     db.execute("PRAGMA journal_mode=WAL")
     return db
 

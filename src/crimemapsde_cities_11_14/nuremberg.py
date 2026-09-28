@@ -20,25 +20,7 @@ from .offline import stage
 ARCHIVE = "https://www.polizei.bayern.de/aktuelles/pressemitteilungen/"
 PUBLISHER = "Polizeipräsidium Mittelfranken"
 ARTICLE_PATH = re.compile(r"/aktuelles/pressemitteilungen/(\d+)/index\.html$")
-CITY = re.compile(r"(?im)^\s*(?:NÜRNBERG|Nürnberg(?:-[\wÄÖÜäöüß-]+)?)\s*[.:]")
-OUTSIDE = re.compile(r"(?im)^\s*(?:FÜRTH|ERLANGEN|ANSBACH|SCHWABACH|HERZOGENAURACH|ROTH)\s*[.:]")
-INSIDE_SCENE = re.compile(
-    r"\b(?:in Nürnberg(?:-[\wÄÖÜäöüß-]+)?|"
-    r"im Nürnberger (?:Stadtteil(?:\s+[\wÄÖÜäöüß-]+)?|Stadtgebiet|Norden|Süden|Osten|Westen|Zentrum)|"
-    r"in der Nürnberger Innenstadt|Nürnberg-[\wÄÖÜäöüß-]+)\b",
-    re.IGNORECASE,
-)
-OUTSIDE_SCENE = re.compile(
-    r"\b(?:Fürth|Fürther|Erlangen|Erlanger|Ansbach|Ansbacher|Schwabach|Schwabacher|"
-    r"Herzogenaurach|Roth|Lauf an der Pegnitz|Feucht|Stein|Zirndorf|Schwaig|"
-    r"Bad Windsheim|Neustadt an der Aisch)\b",
-    re.IGNORECASE,
-)
-REGIONAL_ROAD = re.compile(
-    r"\b(?:Autobahn|BAB\s*\d+|A\s*\d{1,3}|Bundesstraße|B\s*\d{1,3})\b",
-    re.IGNORECASE,
-)
-DATELINE = re.compile(r"^\s*(?P<place>[^.!?]{1,80}?)\s*\(ots\)\s*[-–]?\s*", re.IGNORECASE)
+LLM_SCOPE_EVIDENCE = "full-text LLM municipality and scene review required"
 
 
 def validate_identity(row: dict) -> None:
@@ -58,25 +40,9 @@ def validate_identity(row: dict) -> None:
         raise ValueError("Nuremberg source ID/URL is not an official police article")
 
 
-def city_scope(title: str, body: str) -> tuple[str, str]:
-    """Return only a conservative municipal-review lead, never an offence point."""
-    dateline = DATELINE.match(body)
-    narrative = body[dateline.end():] if dateline else body
-    if road := REGIONAL_ROAD.search(title + " " + narrative):
-        return "needs_review", f"regional road requires scene review: {road[0]}"
-    inside = CITY.search(narrative) or INSIDE_SCENE.search(narrative)
-    outside = OUTSIDE.search(narrative) or OUTSIDE_SCENE.search(narrative)
-    if dateline and not re.fullmatch(
-        r"Nürnberg(?:-[\wÄÖÜäöüß-]+)?", dateline["place"].strip(), re.IGNORECASE
-    ) and inside:
-        return "needs_review", f"non-Nürnberg dateline plus municipal mention: {dateline['place'].strip()}"
-    if inside and outside:
-        return "needs_review", f"mixed municipality mentions: {inside[0].strip()}; {outside[0].strip()}"
-    if inside:
-        return "nuremberg_candidate", inside[0].strip()
-    if outside:
-        return "outside_candidate", outside[0].strip()
-    return "needs_review", "no explicit Nürnberg scene evidence"
+def city_scope(_title: str, _body: str) -> tuple[str, str]:
+    """Return only the technical gate; the LLM must read and decide every report."""
+    return "needs_review", LLM_SCOPE_EVIDENCE
 
 
 def live_sync(

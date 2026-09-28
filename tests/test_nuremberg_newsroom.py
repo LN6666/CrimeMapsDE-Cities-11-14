@@ -53,14 +53,19 @@ def test_article_parser_keeps_story_lists_but_rejects_wrong_publisher_and_contac
         ))
 
 
-def test_city_scope_ignores_dateline_and_publisher_but_flags_mixed_or_roads():
-    assert nuremberg.city_scope("POL-MFR: Nürnberg", "Nürnberg (ots) Allgemeine Mitteilung.")[0] == "needs_review"
-    assert nuremberg.city_scope("Vorfall", "Nürnberg (ots) Im Nürnberger Stadtteil Ziegelstein geschah ein Vorfall.")[0] == "nuremberg_candidate"
-    assert nuremberg.city_scope("Vorfall", "Nürnberg (ots) In Fürth geschah ein Vorfall.")[0] == "outside_candidate"
-    assert nuremberg.city_scope("Vorfall", "In Nürnberg geschah ein Vorfall. Später in Erlangen.")[0] == "needs_review"
-    assert nuremberg.city_scope("Vorfall", "Fürth (ots) Die Polizei in Nürnberg ermittelt.")[0] == "needs_review"
-    assert nuremberg.city_scope("Vorfall", "Nürnberg (ots) Vorfall im Nürnberger Umland.")[0] == "needs_review"
-    assert nuremberg.city_scope("Unfall", "NÜRNBERG. Unfall auf der A73.")[0] == "needs_review"
+def test_collector_never_assigns_semantic_municipality_scope():
+    for title, body in (
+        ("POL-MFR: Nürnberg", "Nürnberg (ots) Allgemeine Mitteilung."),
+        ("Vorfall", "Nürnberg (ots) Im Nürnberger Stadtteil Ziegelstein geschah ein Vorfall."),
+        ("Vorfall", "Nürnberg (ots) In Fürth geschah ein Vorfall."),
+        ("Vorfall", "In Nürnberg geschah ein Vorfall. Später in Erlangen."),
+        ("Vorfall", "Fürth (ots) Die Polizei in Nürnberg ermittelt."),
+        ("Vorfall", "Nürnberg (ots) Vorfall im Nürnberger Umland."),
+        ("Unfall", "NÜRNBERG. Unfall auf der A73."),
+    ):
+        assert nuremberg.city_scope(title, body) == (
+            "needs_review", nuremberg.LLM_SCOPE_EVIDENCE
+        )
 
 
 def test_report_id_body_hash_revision_and_review_invalidation(tmp_path):
@@ -72,7 +77,7 @@ def test_report_id_body_hash_revision_and_review_invalidation(tmp_path):
     saved = db.execute("SELECT * FROM reports").fetchone()
     assert saved["id"] == row["id"] and saved["url"] == row["url"]
     assert len(saved["sha256"]) == 64 and saved["revision"] == 1
-    assert saved["city_scope"] == "nuremberg_candidate"
+    assert saved["city_scope"] == "needs_review"
     assert saved["review_status"] == "pending"
     db.execute("UPDATE reports SET review_status='supported'")
     db.commit()
@@ -83,6 +88,17 @@ def test_report_id_body_hash_revision_and_review_invalidation(tmp_path):
     assert newsroom.accept(db, row["id"], body + " Neue Erkenntnisse.", {}, 5) == "revised"
     assert db.execute("SELECT revision FROM reports").fetchone()[0] == 2
     assert db.execute("SELECT count(*) FROM revisions").fetchone()[0] == 2
+    db.execute(
+        "UPDATE reports SET city_scope='nuremberg_candidate',scope_evidence='legacy rule',"
+        "review_status='supported'"
+    )
+    db.commit()
+    db.close()
+    db = newsroom.connect(tmp_path / "newsroom.sqlite")
+    migrated = db.execute(
+        "SELECT city_scope,scope_evidence,review_status FROM reports"
+    ).fetchone()
+    assert tuple(migrated) == ("needs_review", nuremberg.LLM_SCOPE_EVIDENCE, "pending")
     db.close()
 
 

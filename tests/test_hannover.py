@@ -38,22 +38,17 @@ def test_article_parser_rejects_wrong_publisher_and_excludes_contacts():
         hannover.article_body(ARTICLE.replace("<a>Polizeidirektion Hannover</a>", "<a>Andere Behörde</a>"))
 
 
-def test_municipality_scope_does_not_use_newsroom_or_dateline_as_scene():
-    assert (
-        hannover.city_scope("Polizei Hannover", "Hannover (ots) Allgemeine Informationen.")[0]
-        == "needs_review"
-    )
-    assert (
-        hannover.city_scope("Sturz", "Hannover (ots) Hannover-Mitte. Unfall in der Joachimstraße.")[0]
-        == "hannover_candidate"
-    )
-    assert (
-        hannover.city_scope("Raub", "Hannover (ots) In Lehrte fand ein Raub statt.")[0] == "outside_candidate"
-    )
-    assert (
-        hannover.city_scope("Raub", "Hannover-Mitte. Tat; später Festnahme in Lehrte.")[0] == "needs_review"
-    )
-    assert hannover.city_scope("Unfall", "Hannover-Mitte. Unfall auf der A2.")[0] == "needs_review"
+def test_collector_never_assigns_semantic_municipality_scope():
+    for title, body in (
+        ("Polizei Hannover", "Hannover (ots) Allgemeine Informationen."),
+        ("Sturz", "Hannover (ots) Hannover-Mitte. Unfall in der Joachimstraße."),
+        ("Raub", "Hannover (ots) In Lehrte fand ein Raub statt."),
+        ("Raub", "Hannover-Mitte. Tat; später Festnahme in Lehrte."),
+        ("Unfall", "Hannover-Mitte. Unfall auf der A2."),
+    ):
+        assert hannover.city_scope(title, body) == (
+            "needs_review", hannover.LLM_SCOPE_EVIDENCE
+        )
 
 
 def test_checkpoint_hash_and_review_invalidation(tmp_path):
@@ -67,7 +62,7 @@ def test_checkpoint_hash_and_review_invalidation(tmp_path):
     assert len(stored["sha256"]) == 64
     assert stored["revision"] == 1
     assert stored["review_status"] == "pending"
-    assert stored["city_scope"] == "hannover_candidate"
+    assert stored["city_scope"] == "needs_review"
     db.execute("UPDATE reports SET review_status='supported'")
     db.commit()
     assert hannover.accept(db, row["id"], body, {}, 3) == "unchanged"
@@ -77,6 +72,17 @@ def test_checkpoint_hash_and_review_invalidation(tmp_path):
     assert hannover.accept(db, row["id"], body + " Neue Erkenntnisse.", {}, 5) == "revised"
     assert db.execute("SELECT revision FROM reports").fetchone()[0] == 2
     assert db.execute("SELECT count(*) FROM revisions").fetchone()[0] == 2
+    db.execute(
+        "UPDATE reports SET city_scope='hannover_candidate',scope_evidence='legacy rule',"
+        "review_status='supported'"
+    )
+    db.commit()
+    db.close()
+    db = hannover.connect(tmp_path / "h.sqlite")
+    migrated = db.execute(
+        "SELECT city_scope,scope_evidence,review_status FROM reports"
+    ).fetchone()
+    assert tuple(migrated) == ("needs_review", hannover.LLM_SCOPE_EVIDENCE, "pending")
     db.close()
 
 

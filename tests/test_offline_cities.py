@@ -34,7 +34,7 @@ NUREMBERG = {
     "module,record,scope",
     [
         (dresden, DRESDEN, "needs_review"),
-        (nuremberg, NUREMBERG, "nuremberg_candidate"),
+        (nuremberg, NUREMBERG, "needs_review"),
     ],
 )
 def test_local_stage_preserves_official_id_hash_pending_gate_and_revisions(tmp_path, module, record, scope):
@@ -72,13 +72,15 @@ def test_dresden_collector_never_assigns_semantic_municipality_scope():
         )
 
 
-def test_nuremberg_mixed_municipality_and_motorway_stay_uncertain():
-    assert (
-        nuremberg.city_scope("Polizei Mittelfranken", "NÜRNBERG. Tat am Platz.\nFÜRTH. Weiterer Vorfall.")[0]
-        == "needs_review"
-    )
-    assert nuremberg.city_scope("Unfall", "NÜRNBERG. Unfall auf der A73.")[0] == "needs_review"
-    assert nuremberg.city_scope("Vorfall", "FÜRTH. Ein Vorfall in der Stadt.")[0] == "outside_candidate"
+def test_nuremberg_collector_leaves_all_semantics_to_llm_review():
+    for body in (
+        "NÜRNBERG. Tat am Platz.\nFÜRTH. Weiterer Vorfall.",
+        "NÜRNBERG. Unfall auf der A73.",
+        "FÜRTH. Ein Vorfall in der Stadt.",
+    ):
+        assert nuremberg.city_scope("Polizei Mittelfranken", body) == (
+            "needs_review", nuremberg.LLM_SCOPE_EVIDENCE
+        )
 
 
 @pytest.mark.parametrize("module,record", [(dresden, DRESDEN), (nuremberg, NUREMBERG)])
