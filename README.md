@@ -74,6 +74,25 @@ PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.dresden \
 
 现阶段 `publication_ready` 恒为 `false`。未完成的年度档案覆盖、未核验来源、缺少与修订绑定的 Codex 审查、缺少本批次所有者批准以及不存在获准地图构建，都会在 `blocking_reasons` 中说明。第一组工程消费此契约时仍须执行自己的逐篇审核与发布门禁。
 
+## 来源绑定的 LLM 复核决定
+
+`review_decisions.py` 只导入 LLM 读完官方全文后写出的决定，不用关键词判断公告是否为案件、案件数量、地点或市域。它适配 Essen/Dresden 的 `source_id`/`source_url` 表结构及 Hannover/Nuremberg 的 `id`/`url` 表结构。入口与 source-review pack 的三个输出文件一一对应：
+
+```sh
+PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.review_decisions \
+  --city hannover \
+  --db .runtime/safety/cities/hannover/police.sqlite \
+  --review-decisions .runtime/review/hannover/review-decisions.delta.ndjson \
+  --scope-decisions .runtime/review/hannover/scope-decisions.delta.ndjson \
+  --scene-decisions .runtime/review/hannover/scene-decisions.delta.json
+```
+
+三个文件必须覆盖完全相同的 `source_id` 集合，并在每条记录中重复 `schema_version: 1`、`city`、`source_id`、`source_url` 和 `source_sha256`。这些字段必须与本地检查点的当前全文完全一致。review 文件另含 `verdict`、逐字 `evidence_quotes`、`review_note`、`reviewer` 和带时区的 `reviewed_at`；scope 文件另含 `scope_verdict`（`in_city`、`out_of_city`、`mixed` 或 `uncertain`）及逐字引文。
+
+scene 文件是 `{"schema_version":1,"city":"...","articles":[...]}`。每篇必须明确给出非负 `incident_count`、同样长度的 `incidents`、完整 `formal_locations`，并把 `incidents_complete` 与 `formal_locations_complete` 显式设为 `true`。每个案件及每个正式地点都要有能在当前完整正文中逐字找到的引文；一个案件可以引用多个地点，一篇也可以包含多个案件。零案件和零地点是允许的显式决定。街道、区域、区级及未知精度地点不得带代表点坐标，后续 GIS 阶段应保留道路或区域几何，无法确定的几何继续为空。
+
+导入在全部记录验证通过后才原子写入本地 `llm_review_decisions` 和历史表。源正文哈希或 URL 改变会让旧决定成为 stale；决定内容改变会生成新的 `decision_set_digest`，因此任何绑定旧摘要的后续批准都失效。导入结果始终返回 `owner_approval_required: true`、`owner_approved: false` 和 `publication_ready: false`。原文、三个决定文件及本地决定表均属于运行时材料，必须留在 Git 忽略目录中。
+
 ## 本地运行
 
 需要 Python 3.12 和 `uv`。
