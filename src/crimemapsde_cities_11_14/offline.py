@@ -128,7 +128,11 @@ def stage(
                 now = time.time()
                 if old is None:
                     db.execute(
-                        """INSERT INTO reports VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,'pending')""",
+                        """INSERT INTO reports
+                           (source_id,source_url,publisher,title,published,publication_precision,
+                            body,sha256,revision,first_seen,observed,city_scope,scope_evidence,
+                            source_verified,review_status)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,'pending')""",
                         (
                             row["source_id"],
                             row["source_url"],

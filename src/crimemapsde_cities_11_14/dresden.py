@@ -15,7 +15,7 @@ import re
 import sqlite3
 import time
 from contextlib import nullcontext
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -40,16 +40,12 @@ PUBLISHER = "Polizeidirektion Dresden"
 USER_AGENT = "CrimeMapsDE-Cities-11-14/0.1 (Dresden official media archive)"
 SPEC = SourceSpec("10997", PUBLISHER, ARCHIVE, USER_AGENT)
 ARTICLE_PATH = re.compile(r"/medien/news/(\d+)$")
-CITY = re.compile(r"(?im)^\s*(?:Landeshauptstadt Dresden|Ort:\s*Dresden(?:-[\wÄÖÜäöüß-]+)?)\s*$")
-OUTSIDE = re.compile(
-    r"(?im)^\s*(?:Landkreis Meißen|Landkreis Sächsische Schweiz-Osterzgebirge|"
-    r"Ort:\s*(?:Meißen|Pirna|Radebeul|Freital|Dippoldiswalde|Riesa|Großenhain)\b[^\n]*)\s*$"
-)
 
 ONLINE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sachsen_archive_cursor (
  year INTEGER PRIMARY KEY, next_page INTEGER NOT NULL, pages_scanned INTEGER NOT NULL,
- complete INTEGER NOT NULL, updated REAL NOT NULL
+ complete INTEGER NOT NULL, first_searched TEXT NOT NULL, through_date TEXT NOT NULL,
+ updated REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sachsen_queue (
  source_id TEXT PRIMARY KEY, source_url TEXT NOT NULL UNIQUE,
@@ -87,20 +83,19 @@ def validate_identity(row: dict) -> None:
         raise ValueError("Dresden source ID/URL is not a native Medienservice article")
 
 
-def city_scope(_title: str, body: str) -> tuple[str, str]:
-    inside = CITY.search(body)
-    outside = OUTSIDE.search(body)
-    if inside and outside:
-        return "needs_review", "mixed city and district bulletin headings"
-    if inside:
-        return "dresden_candidate", inside[0].strip()
-    if outside:
-        return "outside_candidate", outside[0].strip()
-    return "needs_review", "no unambiguous Dresden municipal heading"
+def city_scope(_title: str, _body: str) -> tuple[str, str]:
+    """Return only the technical review gate; semantic scope belongs to the LLM review."""
+    return "needs_review", "pending source-bound LLM municipality and scene review"
 
 
 def _ensure_online_schema(db: sqlite3.Connection) -> None:
     db.executescript(ONLINE_SCHEMA)
+    cursor_columns = {
+        row["name"] for row in db.execute("PRAGMA table_info(sachsen_archive_cursor)")
+    }
+    for name in ("first_searched", "through_date"):
+        if name not in cursor_columns:
+            db.execute(f"ALTER TABLE sachsen_archive_cursor ADD COLUMN {name} TEXT")
     existing = {row["name"] for row in db.execute("PRAGMA table_info(reports)")}
     additions = {
         "etag": "TEXT", "modified": "TEXT", "checked": "REAL", "error": "TEXT",
@@ -142,17 +137,17 @@ def _accept_online(
     ).fetchone()
     changed = old is None or old_source is None or old_source["source_sha256"] != source_digest
     revision = (old["revision"] if old else 0) + int(changed)
+    scope, scope_evidence = city_scope(article.title, article.body)
     if old is None:
         db.execute(
             """INSERT INTO reports
                (source_id,source_url,publisher,title,published,publication_precision,body,sha256,
                 revision,first_seen,observed,city_scope,scope_evidence,source_verified,review_status,
                 etag,modified,checked,error,failures,retry_after,http_status)
-               VALUES(?,?,?,?,?,'time',?,?,?,?,?,'needs_review',?,1,'pending',?,?,?,NULL,0,0,200)""",
+               VALUES(?,?,?,?,?,'time',?,?,?,?,?,?,?,1,'pending',?,?,?,NULL,0,0,200)""",
             (
                 article.source_id, article.source_url, PUBLISHER, article.title, article.published,
-                article.body, body_digest, revision, now, now,
-                "source-bound municipal and scene review pending",
+                article.body, body_digest, revision, now, now, scope, scope_evidence,
                 headers.get("etag"), headers.get("last-modified"), now,
             ),
         )
@@ -165,13 +160,13 @@ def _accept_online(
         db.execute(
             """UPDATE reports SET source_url=?,publisher=?,title=?,published=?,
                publication_precision='time',body=?,sha256=?,revision=?,observed=?,
-               city_scope='needs_review',scope_evidence=?,source_verified=1,
+               city_scope=?,scope_evidence=?,source_verified=1,
                review_status=CASE WHEN ? THEN 'pending' ELSE review_status END,
                etag=?,modified=?,checked=?,error=NULL,failures=0,retry_after=0,http_status=200
                WHERE source_id=?""",
             (
                 article.source_url, PUBLISHER, article.title, article.published, article.body,
-                body_digest, revision, now, "source-bound municipal and scene review pending",
+                body_digest, revision, now, scope, scope_evidence,
                 int(stale), headers.get("etag"), headers.get("last-modified"), now,
                 article.source_id,
             ),
@@ -261,19 +256,33 @@ def live_sync(
             policy = robots_policy(session.get(ROBOTS_URL), SPEC, minimum_delay=delay)
             stats["robots_status"] = policy.status
             last_request = [monotonic()]
-            landing = source_get(
-                session, ARCHIVE, SPEC, policy, last_request, sleeper=sleeper, monotonic=monotonic
-            )
-            snapshot = landing_snapshot(landing.text, str(landing.url), SPEC)
             state = db.execute(
-                "SELECT next_page,pages_scanned,complete FROM sachsen_archive_cursor WHERE year=?",
+                """SELECT next_page,pages_scanned,complete,first_searched,through_date
+                   FROM sachsen_archive_cursor WHERE year=?""",
                 (year,),
             ).fetchone()
-            was_complete = bool(state and state["complete"])
-            page_number = state["next_page"] if state and not was_complete else 1
-            pages_scanned = state["pages_scanned"] if state else 0
-            for _ in range(1 if was_complete else max_pages):
-                url = search_url(SPEC, first_searched=snapshot, year=year, page=page_number)
+            resume = bool(
+                state and not state["complete"] and state["first_searched"]
+                and state["through_date"]
+            )
+            if resume:
+                snapshot = state["first_searched"]
+                through = date.fromisoformat(state["through_date"])
+                page_number = state["next_page"]
+                pages_scanned = state["pages_scanned"]
+            else:
+                landing = source_get(
+                    session, ARCHIVE, SPEC, policy, last_request,
+                    sleeper=sleeper, monotonic=monotonic,
+                )
+                snapshot = landing_snapshot(landing.text, str(landing.url), SPEC)
+                through = min(date(year, 12, 31), datetime.now(UTC).date())
+                page_number = 1
+                pages_scanned = 0
+            for _ in range(max_pages):
+                url = search_url(
+                    SPEC, first_searched=snapshot, year=year, page=page_number, through=through
+                )
                 response = source_get(
                     session, url, SPEC, policy, last_request, sleeper=sleeper, monotonic=monotonic
                 )
@@ -290,16 +299,19 @@ def live_sync(
                 stats["archive_pages"] += 1
                 stats["discovered"] += len(records)
                 pages_scanned += 1
-                if not was_complete:
-                    db.execute(
-                        """INSERT INTO sachsen_archive_cursor(year,next_page,pages_scanned,complete,updated)
-                           VALUES(?,?,?,?,?) ON CONFLICT(year) DO UPDATE SET
-                           next_page=excluded.next_page,pages_scanned=excluded.pages_scanned,
-                           complete=excluded.complete,updated=excluded.updated""",
-                        (year, page_number if terminal else page_number + 1, pages_scanned,
-                         int(terminal), time.time()),
-                    )
-                    db.commit()
+                db.execute(
+                    """INSERT INTO sachsen_archive_cursor
+                       (year,next_page,pages_scanned,complete,first_searched,through_date,updated)
+                       VALUES(?,?,?,?,?,?,?) ON CONFLICT(year) DO UPDATE SET
+                       next_page=excluded.next_page,pages_scanned=excluded.pages_scanned,
+                       complete=excluded.complete,first_searched=excluded.first_searched,
+                       through_date=excluded.through_date,updated=excluded.updated""",
+                    (
+                        year, 1 if terminal else page_number + 1, pages_scanned, int(terminal),
+                        snapshot, through.isoformat(), time.time(),
+                    ),
+                )
+                db.commit()
                 if terminal:
                     break
                 page_number += 1

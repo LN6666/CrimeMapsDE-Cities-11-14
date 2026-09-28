@@ -33,7 +33,7 @@ NUREMBERG = {
 @pytest.mark.parametrize(
     "module,record,scope",
     [
-        (dresden, DRESDEN, "dresden_candidate"),
+        (dresden, DRESDEN, "needs_review"),
         (nuremberg, NUREMBERG, "nuremberg_candidate"),
     ],
 )
@@ -61,18 +61,15 @@ def test_local_stage_preserves_official_id_hash_pending_gate_and_revisions(tmp_p
     db.close()
 
 
-def test_dresden_bulletin_mixed_city_and_district_stays_uncertain():
-    assert (
-        dresden.city_scope(
-            "Mehrere Meldungen", "Landeshauptstadt Dresden\nOrt: Dresden-Mitte\nLandkreis Meißen\nOrt: Riesa"
-        )[0]
-        == "needs_review"
-    )
-    assert (
-        dresden.city_scope("Einbruch", "Landkreis Meißen\nOrt: Riesa\nEin Einbruch im Stadtgebiet.")[0]
-        == "outside_candidate"
-    )
-    assert dresden.city_scope("Einbruch", "In Dresden arbeitet die Pressestelle.")[0] == "needs_review"
+def test_dresden_collector_never_assigns_semantic_municipality_scope():
+    for body in (
+        "Landeshauptstadt Dresden\nOrt: Dresden-Mitte\nLandkreis Meißen\nOrt: Riesa",
+        "Landkreis Meißen\nOrt: Riesa\nEin Einbruch im Stadtgebiet.",
+        "In Dresden arbeitet die Pressestelle.",
+    ):
+        assert dresden.city_scope("Mehrere Meldungen", body) == (
+            "needs_review", "pending source-bound LLM municipality and scene review"
+        )
 
 
 def test_nuremberg_mixed_municipality_and_motorway_stay_uncertain():
@@ -104,6 +101,7 @@ def _dresden_article(source_id="1100218", publisher="Polizeidirektion Dresden"):
     <meta name="id" content="{source_id}" />
     <meta name="url" content="{dresden.ORIGIN}/medien/news/{source_id}" />
     <meta name="title" content="Mehrere Meldungen" />
+    <meta name="subtitle" content="Medieninformation Nr. 501|26" />
     <meta name="date" content="28.09.2026 15:21" />
     <meta name="author" content="{publisher}" /></head><body>
     <h1 id="page-title">Mehrere Meldungen</h1><div class="row content-row">
@@ -152,6 +150,21 @@ def test_dresden_live_public_archive_is_bounded_and_review_gated(tmp_path):
         city_scope=dresden.city_scope,
     )
     assert len(rows) == 1 and rows[0]["source_verified"] is True
+
+    offline_record = {
+        **DRESDEN,
+        "source_id": "1100219",
+        "source_url": "https://medienservice.sachsen.de/medien/news/1100219",
+    }
+    manifest = tmp_path / "offline-after-live.jsonl"
+    _write(manifest, [offline_record])
+    assert dresden.stage_file(path, manifest, max_records=1)["new"] == 1
+    with connect(path) as db:
+        saved = db.execute(
+            "SELECT source_verified,review_status FROM reports WHERE source_id='1100219'"
+        ).fetchone()
+        assert tuple(saved) == (0, "pending")
+        assert db.execute("SELECT count(*) FROM reports").fetchone()[0] == 2
 
 
 def test_offline_stage_is_bounded_and_reports_extra_input(tmp_path):
@@ -203,7 +216,7 @@ def test_dresden_saved_html_file_is_bound_to_read_only_review(tmp_path):
     assert len(rows) == 1
     assert rows[0]["source_file_sha256"] == record["source_file_sha256"]
     assert rows[0]["source_file_text_matches"] is True
-    assert rows[0]["city_scope"] == "dresden_candidate"
+    assert rows[0]["city_scope"] == "needs_review"
     assert rows[0]["source_verified"] is False and rows[0]["publication_ready"] is False
     source.write_text(source.read_text() + "<!-- changed -->")
     with pytest.raises(ValueError, match="SHA-256 mismatch"):

@@ -216,36 +216,9 @@ def article_record(page: str, requested_url: str) -> dict:
     return {"source_id": node[1], "source_url": url, "body": body}
 
 
-LEAD = re.compile(
-    r"^\s*(?:\d{5}\s+)?(?P<city>Essen|E\.|Mülheim\s+an\s+der\s+Ruhr|Mülheim|MH\.|Oberhausen|OB\.)"
-    r"(?:[-.\s][^:\n]{0,55})?:",
-    re.IGNORECASE | re.MULTILINE,
-)
-OUTSIDE = re.compile(
-    r"\b(?:Mülheim(?:\s+an\s+der\s+Ruhr)?|Oberhausen|Duisburg|Bottrop|Gelsenkirchen)\b", re.IGNORECASE
-)
-INSIDE = re.compile(r"\bEssen(?:-[\wÄÖÜäöüß]+)?\b", re.IGNORECASE)
-MOTORWAY = re.compile(r"\b(?:Autobahn|Bundesautobahn|BAB\s*\d+|A\s*\d{1,3})\b", re.IGNORECASE)
-
-
-def city_scope(title: str, body: str) -> tuple[str, str]:
-    """Flag likely municipality for review; never infer an incident coordinate."""
-    narrative = re.sub(
-        r"\b(?:Polizei|Polizeipräsidium|Staatsanwaltschaft)\s+Essen\b", "", title + "\n" + body
-    )
-    if motorway := MOTORWAY.search(narrative):
-        return "needs_review", f"motorway requires scene review: {motorway[0]}"
-    leads = list(LEAD.finditer(body))
-    if len(leads) != 1:
-        return "needs_review", "no single explicit municipal scene heading"
-    lead = leads[0]["city"]
-    if lead.lower() in {"essen", "e."}:
-        if outside := OUTSIDE.search(narrative):
-            return "needs_review", f"Essen lead and other municipality: {outside[0]}"
-        return "essen_candidate", leads[0][0]
-    if INSIDE.search(narrative):
-        return "needs_review", f"outside-city lead and Essen mention: {lead}"
-    return "outside_candidate", leads[0][0]
+def city_scope(_title: str, _body: str) -> tuple[str, str]:
+    """Keep every fetched report pending for full-text LLM municipal review."""
+    return "needs_review", "full-text LLM municipal and scene review required"
 
 
 def connect(path: str | Path) -> sqlite3.Connection:

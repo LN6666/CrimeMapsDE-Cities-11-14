@@ -78,14 +78,19 @@ def test_online_audit_exports_only_metadata_and_keeps_publication_blocked(tmp_pa
     path = _online_record(tmp_path, slug)
     result = audit_city(slug, 2026, db_path=path)
     assert len(result["records"]) == 1
-    assert len(result["municipal_review_candidates"]) == 1
+    expected_scope = {
+        "essen": "needs_review",
+        "hannover": "hannover_candidate",
+        "nuremberg": "nuremberg_candidate",
+    }[slug]
+    assert len(result["municipal_review_candidates"]) == (0 if slug == "essen" else 1)
     record = result["records"][0]
     assert record["source_id"]
     assert record["source_url"].startswith("https://")
     assert record["source_date"].startswith("2026-")
     assert len(record["sha256"]) == 64
     assert record["revision"] == 1
-    assert record["city_scope"] == f"{slug}_candidate"
+    assert record["city_scope"] == expected_scope
     assert record["review_status"] == "pending"
     assert record["scope_evidence_valid"]
     assert record["source_verified"]
@@ -116,7 +121,7 @@ def test_discovered_without_body_cannot_be_candidate_or_complete_source(tmp_path
     assert result["archive_complete"]
     assert not result["source_verified"]
     assert len(result["records"]) == 2
-    assert len(result["municipal_review_candidates"]) == 1
+    assert result["municipal_review_candidates"] == []
     assert not result["records"][1]["municipal_review_candidate"]
     assert "source_verification_incomplete" in result["blocking_reasons"]
 
@@ -179,7 +184,9 @@ def test_offline_records_remain_unverified_even_if_mutable_flag_changes(tmp_path
         db.execute("UPDATE reports SET source_verified=1")
     result = audit_city(slug, 2026, db_path=path)
     record = result["records"][0]
-    assert record["city_scope"] == f"{slug}_candidate"
+    assert record["city_scope"] == (
+        "needs_review" if slug == "dresden" else "nuremberg_candidate"
+    )
     assert record["has_body"] and record["body_hash_valid"]
     assert record["scope_evidence_valid"]
     assert not record["source_verified"]

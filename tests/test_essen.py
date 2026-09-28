@@ -46,20 +46,20 @@ def test_article_uses_native_node_id_and_excludes_sidebar():
         essen.article_record(ARTICLE, "https://essen.polizei.nrw/presse/falscher-fall")
 
 
-def test_city_scope_is_conservative_about_authority_other_cities_and_motorways():
-    assert essen.city_scope("Polizei Essen", "Polizei Essen | PLZ: 45141")[0] == "needs_review"
-    assert (
-        essen.city_scope("Überfall", "Essen-Nordviertel:\nEin Überfall am Nordplatz.")[0] == "essen_candidate"
-    )
-    assert (
-        essen.city_scope("Überfall", "45479 MH.-Saarn:\nEin Überfall am Nordplatz.")[0] == "outside_candidate"
-    )
-    assert essen.city_scope("Brand", "Oberhausen-Altstadt:\nEin Haus brannte.")[0] == "outside_candidate"
-    assert essen.city_scope("Ermittlungen", "Essen-Mitte:\nEine Festnahme in Mülheim.")[0] == "needs_review"
-    assert essen.city_scope("Unfall", "Essen-Kray:\nUnfall auf der A40.")[0] == "needs_review"
-    assert (
-        essen.city_scope("Zwei Vorfälle", "Essen-Mitte:\nFall eins.\nMülheim:\nFall zwei.")[0]
-        == "needs_review"
+@pytest.mark.parametrize(
+    ("title", "body"),
+    [
+        ("Polizei Essen", "Polizei Essen | PLZ: 45141"),
+        ("Überfall", "Essen-Nordviertel:\nEin Überfall am Nordplatz."),
+        ("Überfall", "45479 MH.-Saarn:\nEin Überfall am Nordplatz."),
+        ("Brand", "Oberhausen-Altstadt:\nEin Haus brannte."),
+        ("Unfall", "Essen-Kray:\nUnfall auf der A40."),
+        ("Zwei Vorfälle", "Essen-Mitte:\nFall eins.\nMülheim:\nFall zwei."),
+    ],
+)
+def test_city_scope_never_performs_programmatic_semantic_filtering(title, body):
+    assert essen.city_scope(title, body) == (
+        "needs_review", "full-text LLM municipal and scene review required"
     )
 
 
@@ -74,7 +74,7 @@ def test_local_checkpoint_preserves_native_id_hash_and_resets_review_on_revision
     assert len(first["sha256"]) == 64
     assert first["revision"] == 1
     assert first["review_status"] == "pending"
-    assert first["city_scope"] == "essen_candidate"
+    assert first["city_scope"] == "needs_review"
     db.execute("UPDATE reports SET review_status='supported'")
     db.commit()
     assert essen.accept(db, row["url"], record, {}, 3) == "unchanged"
