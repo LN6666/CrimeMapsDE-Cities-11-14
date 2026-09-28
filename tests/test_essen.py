@@ -117,8 +117,6 @@ def test_robots_denial_stops_before_archive_request(tmp_path, monkeypatch):
 
     def respond(request):
         requested.append(str(request.url))
-        if len(requested) == 1:
-            return httpx.Response(503)
         return httpx.Response(200, text="User-agent: *\nDisallow: /presse/\n")
 
     client_class = httpx.Client
@@ -130,4 +128,80 @@ def test_robots_denial_stops_before_archive_request(tmp_path, monkeypatch):
     )
     with pytest.raises(ValueError, match="robots.txt disallows"):
         essen.sync(tmp_path / "essen.sqlite", 2026, max_pages=1, limit=1)
-    assert requested == ["https://essen.polizei.nrw/robots.txt"] * 2
+    assert requested == ["https://essen.polizei.nrw/robots.txt"]
+
+
+@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize("target", ["robots", "listing"])
+def test_first_source_status_stops_without_retry(tmp_path, monkeypatch, status, target):
+    requested = []
+
+    def respond(request):
+        requested.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(
+                status if target == "robots" else 200,
+                text="User-agent: *\nDisallow: /admin/\n",
+            )
+        return httpx.Response(status, text="unavailable")
+
+    client_class = httpx.Client
+    monkeypatch.setattr(essen.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        essen.httpx,
+        "Client",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        essen.sync(tmp_path / "stopped.sqlite", 2026, max_pages=1, limit=1)
+    assert requested == (
+        [essen.ORIGIN + "/robots.txt"]
+        if target == "robots" else [essen.ORIGIN + "/robots.txt", essen.archive_url(2026, 0)]
+    )
+
+
+@pytest.mark.parametrize("status", [429, 503, 200])
+def test_first_article_error_stops_batch_and_preserves_pending(tmp_path, monkeypatch, status):
+    requested = []
+    first_url = essen.ORIGIN + "/presse/essen-fall"
+    second_url = essen.ORIGIN + "/presse/muelheim-fall"
+
+    def respond(request):
+        requested.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nDisallow: /admin/\n")
+        if request.url.path == "/presse/pressemitteilungen":
+            return httpx.Response(200, text=LISTING)
+        if request.url.path == "/presse/essen-fall":
+            return httpx.Response(
+                status,
+                text=ARTICLE.replace(">Polizei Essen</div>", ">Andere Behörde</div>")
+                if status == 200 else "unavailable",
+            )
+        if request.url.path == "/presse/muelheim-fall":
+            return httpx.Response(200, text=ARTICLE)
+        raise AssertionError(request.url)
+
+    client_class = httpx.Client
+    monkeypatch.setattr(essen.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        essen.httpx,
+        "Client",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    path = tmp_path / "articles.sqlite"
+    result = essen.sync(path, 2026, max_pages=1, limit=2)
+    assert result["failed"] == 1 and result["pending"] == 2
+    assert result["stopped_on_source_error"] == {
+        "source_url": first_url,
+        "http_status": None if status == 200 else status,
+        "error_type": "ValueError" if status == 200 else "HTTPStatusError",
+    }
+    assert requested.count(first_url) == 1
+    assert second_url not in requested
+    db = essen.connect(path)
+    first = db.execute("SELECT body,failures,error FROM reports WHERE source_url=?", (first_url,)).fetchone()
+    second = db.execute("SELECT body,error FROM reports WHERE source_url=?", (second_url,)).fetchone()
+    assert first["body"] is None and first["failures"] == 1 and first["error"]
+    assert second["body"] is None and second["error"] is None
+    db.close()

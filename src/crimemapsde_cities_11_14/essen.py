@@ -363,15 +363,8 @@ def sync(
     db.commit()
     try:
         with httpx.Client(timeout=25, follow_redirects=False, headers={"User-Agent": USER_AGENT}) as client:
-            for attempt in range(3):
-                try:
-                    robots_response = client.get(ORIGIN + "/robots.txt")
-                    robots_response.raise_for_status()
-                    break
-                except httpx.HTTPError:
-                    if attempt == 2:
-                        raise
-                    time.sleep(2**attempt)
+            robots_response = client.get(ORIGIN + "/robots.txt")
+            robots_response.raise_for_status()
             if (
                 str(robots_response.url) != ORIGIN + "/robots.txt"
                 or "user-agent:" not in robots_response.text.lower()
@@ -390,20 +383,9 @@ def sync(
                         raise ValueError("Unexpected native Essen origin")
                     if not robots.can_fetch(USER_AGENT, url):
                         raise ValueError("robots.txt disallows " + url)
-                    for attempt in range(3):
-                        time.sleep(max(0, delay - (time.monotonic() - last_request)))
-                        last_request = time.monotonic()
-                        try:
-                            response = client.get(url, headers=headers)
-                        except httpx.TransportError:
-                            if attempt == 2:
-                                raise
-                            time.sleep(2**attempt)
-                            continue
-                        if (response.status_code == 429 or response.status_code >= 500) and attempt < 2:
-                            time.sleep(2**attempt)
-                            continue
-                        break
+                    time.sleep(max(0, delay - (time.monotonic() - last_request)))
+                    last_request = time.monotonic()
+                    response = client.get(url, headers=headers)
                     if response.status_code in (301, 302, 303, 307, 308):
                         url = urljoin(str(response.url), response.headers["location"])
                         continue
@@ -473,6 +455,12 @@ def sync(
                 except (httpx.HTTPError, ValueError) as exc:
                     fail(db, row["source_url"], f"{type(exc).__name__}: {exc}", time.time())
                     stats["failed"] += 1
+                    stats["stopped_on_source_error"] = {
+                        "source_url": row["source_url"],
+                        "http_status": exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None,
+                        "error_type": type(exc).__name__,
+                    }
+                    break
             stats["stored"] = db.execute(
                 "SELECT count(*) FROM reports WHERE published LIKE ? AND body IS NOT NULL", (f"{year}-%",)
             ).fetchone()[0]
