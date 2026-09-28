@@ -17,8 +17,8 @@
 
 | 城市 | 当前检查点 | 仍待处理 |
 | --- | ---: | --- |
-| Essen | 20 / 4 | 16 篇正文、年度遍历、市域与逐篇语义复核 |
-| Dresden | 6 / 2 | 仅完成 1 页、2 篇正文的小型实网探针；4 篇待正文，年度遍历与逐篇审核未完成 |
+| Essen | 402 / 402 | 警方原生档案 2026 通道遍历完成、0 缺失正文、0 来源错误；市域与逐篇语义复核待完成 |
+| Dresden | 479 / 479 | 官方 Medienservice 2026 通道 80 页遍历完成、0 缺失正文、0 来源错误；多区域公告的市域与场景复核待完成 |
 | Hannover | 470 / 470 | 警方链接新闻室的 2026 列表遍历已跨入 2025，正文哈希全部复核一致；全部 470 篇市域／语义复核仍待处理 |
 | Nuremberg | 849 / 849 | 警方署名 Presseportal 新闻室的 2026 遍历已完成；仍需 Mittelfranken 市域筛选、多场景复核与所有者批准 |
 
@@ -30,11 +30,11 @@
 
 警方署名公告可能涉及 Mülheim an der Ruhr、Oberhausen 和跨市高速路。`city_scope` 只提供保守的市域复核线索；发布机关、邮编或新闻室标签均不能证明案发地在 Essen。多地点、混合辖区、高速与不明确地点进入 `needs_review`。每篇公告仍须逐条对照官方原文接受 Codex 审查，再交项目所有者检查、质问和批准；缺失、过期或不确定的审查阻止发布。
 
-2026-09-28 的有限核对中，原生档案的 2026 年筛选显示 401 条，[Polizei Essen 署名新闻室](https://www.presseportal.de/blaulicht/nr/11562)显示 418 条。两处数量不同，原因尚未核实；这里不宣称完整年度覆盖。警方公告本身也不是全量犯罪记录。
+2026-09-29 的本地完整原生通道检查点含 402 条正文。此前 2026-09-28 的页面核对中，原生筛选显示 401 条，[Polizei Essen 署名新闻室](https://www.presseportal.de/blaulicht/nr/11562)显示 418 条。来源会新增记录，且两处数量仍不一致；这里不宣称两个档案等价或警方公告是全量犯罪记录。
 
 ## 汉诺威来源与边界
 
-[Polizeidirektion Hannover 的新闻办公室](https://www.pd-h.polizei-nds.de/wir_ueber_uns/presse/)明确链接其[Presseportal 新闻室](https://www.presseportal.de/blaulicht/nr/66841)。采集器先核验 Presseportal 的 [robots.txt](https://www.presseportal.de/robots.txt)，再按有界页数读取索引和正文；SQLite 保存新闻室文章 ID、URL、原文哈希、修订与待审状态。年度断点扫描会在续扫时刷新新闻室首页；`--pages` 指续扫页数，实际索引请求最多多一页首页。当前列表遍历已经跨入 2025，2026 新闻室通道发现 470 条；正文仍按限速、有界批次回补，不能把列表完成等同于市域审核或地图完成。
+[Polizeidirektion Hannover 的新闻办公室](https://www.pd-h.polizei-nds.de/wir_ueber_uns/presse/)明确链接其[Presseportal 新闻室](https://www.presseportal.de/blaulicht/nr/66841)。采集器先核验 Presseportal 的 [robots.txt](https://www.presseportal.de/robots.txt)，再按有界页数读取索引和正文；SQLite 保存新闻室文章 ID、URL、原文哈希、修订与待审状态。年度断点扫描会在续扫时刷新新闻室首页；`--pages` 指续扫页数，实际索引请求最多多一页首页。当前列表遍历已经跨入 2025，2026 新闻室通道发现并保存 470/470 篇正文，0 缺失、0 来源错误；这仍不等同于市域审核或地图完成。
 
 新闻室包含 Langenhagen、Lehrte、Burgwedel 等周边地点及高速公路。`hannover_candidate` 只是市域复核线索；含其他市镇或跨市道路的记录保持待核验，不自动进入汉诺威地图。新闻室首页地点标签和 `Hannover (ots)` 发稿地不作为案发地点证据。
 
