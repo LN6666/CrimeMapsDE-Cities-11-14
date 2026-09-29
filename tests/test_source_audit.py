@@ -92,9 +92,8 @@ def test_online_audit_exports_only_metadata_and_keeps_publication_blocked(tmp_pa
     assert not result["archive_complete"]
     assert result["source_verified"]
     assert not result["publication_ready"]
-    if slug == "nuremberg":
-        assert "native_archive_robots_blocked" in result["blocking_reasons"]
-        assert "newsroom_coverage_unverified" in result["blocking_reasons"]
+    assert "native_archive_robots_blocked" not in result["blocking_reasons"]
+    assert "newsroom_coverage_unverified" not in result["blocking_reasons"]
     serialized = json.dumps(result, ensure_ascii=False)
     assert "erfundener" not in serialized
     assert "Testplatz" not in serialized
@@ -192,7 +191,7 @@ def test_offline_records_remain_unverified_even_if_mutable_flag_changes(tmp_path
     ) in result["blocking_reasons"]
 
 
-def test_nuremberg_completed_newsroom_cursor_does_not_claim_native_archive_complete(tmp_path):
+def test_nuremberg_completed_selected_newsroom_cursor_is_source_complete(tmp_path):
     path = _online_record(tmp_path, "nuremberg")
     db = nuremberg_newsroom.connect(path)
     db.execute("INSERT INTO archive_cursor VALUES(2026,NULL,1,1,3)")
@@ -201,7 +200,7 @@ def test_nuremberg_completed_newsroom_cursor_does_not_claim_native_archive_compl
     result = audit_city("nuremberg", 2026, db_path=path)
     assert result["municipal_review_candidates"] == []
     assert result["source_verified"]
-    assert not result["archive_complete"]
+    assert result["archive_complete"]
     assert not result["publication_ready"]
 
 

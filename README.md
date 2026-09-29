@@ -7,7 +7,7 @@
 | 11 | Essen（埃森） | `essen` | 警方原生公告采集器；未发布地图 |
 | 12 | Dresden（德累斯顿） | `dresden` | 官方 Medienservice 公开档案有界采集；未发布地图 |
 | 13 | Hannover（汉诺威） | `hannover` | 警方链接的新闻室有界采集；未发布地图 |
-| 14 | Nuremberg（纽伦堡） | `nuremberg` | 警方署名新闻室有界采集；原生站仅离线暂存，未发布地图 |
+| 14 | Nuremberg（纽伦堡） | `nuremberg` | 选定警方署名新闻室有界采集；未发布地图 |
 
 柏林仍是第一组 `CrimeMapsBerlin` 的默认入口。本仓库没有城市地图、坐标或可发布数据。仓库名称中的 11–14 是城市组编号，不表示覆盖或完成进度。
 
@@ -17,12 +17,21 @@
 
 | 城市 | 当前检查点 | 仍待处理 |
 | --- | ---: | --- |
-| Essen | 402 / 402 | 警方原生档案 2026 通道遍历完成；可见首段摘要与后续正文已一并重抓，402 条来源哈希全部更新，0 缺失正文、0 来源错误；市域与逐篇语义复核待完成 |
-| Dresden | 479 / 479 | 官方 Medienservice 2026 通道 80 页遍历完成、0 缺失正文、0 来源错误；多区域公告的市域与场景复核待完成 |
-| Hannover | 470 / 470 | 警方链接新闻室的 2026 列表遍历已跨入 2025，正文哈希全部复核一致；全部 470 篇市域／语义复核仍待处理 |
-| Nuremberg | 849 / 849 | 警方署名 Presseportal 新闻室的 2026 遍历已完成；仍需 Mittelfranken 市域筛选、多场景复核与所有者批准 |
+| Essen | 402 / 402 | 警方原生档案 2026 通道遍历完成；可见首段摘要与后续正文已一并重抓，402 条来源哈希全部更新，0 缺失正文、0 来源错误；本地 8 篇已有当前哈希绑定的逐篇语义决定，394 篇待复核 |
+| Dresden | 479 / 479 | 官方 Medienservice 2026 通道 80 页遍历完成、0 缺失正文、0 来源错误；本地 8 篇已有当前哈希绑定的逐篇语义决定，471 篇待复核 |
+| Hannover | 470 / 470 | 警方链接新闻室的 2026 列表遍历已跨入 2025，正文哈希全部复核一致；本地 8 篇已有当前哈希绑定的逐篇语义决定，462 篇待复核 |
+| Nuremberg | 849 / 849 | 选定的警方署名 Presseportal 新闻室 2026 来源收集完成；仍需 Mittelfranken 市域筛选、多场景复核与所有者批准 |
 
-纽伦堡的 169 条基线输入和 680 条差量输入 source ID 零重叠，合并覆盖 849 条。这里的完成仅指该警方署名分发通道；巴伐利亚警方原生档案受 robots 限制，不能据此声称原生档案或纽伦堡地图完成。所有检查点、原文和生成数据均保持 Git 忽略。
+纽伦堡的 169 条基线输入和 680 条差量输入 source ID 零重叠，合并覆盖 849 条。这里的完成仅指所有者选定的警方署名分发通道；不能据此声称纽伦堡市域审查或地图完成。所有检查点、原文和生成数据均保持 Git 忽略。
+
+上述三城语义决定是 2026-09-29 的本地恢复断点，不是抽样准确率或发布成果。三城的
+首批决定均已通过 URL、正文 SHA-256、逐字证据、事件/正式地点完整声明和幂等重导校验；
+对应只读清单目前分别保留 Essen 8 个事件、19 个正式地点、13 个市内几何请求，Dresden
+6/11/7，Hannover 2/15/4。其余公告仍必须逐篇读取全文；全量几何、地图语义、所有者质询与
+批准均未完成，所以三城仍保持 `owner_approved=false`、`publication_ready=false`。
+当前受支持子集的几何请求已全部由 LLM 对照受检 OSM 索引作出决定：Essen 10 个解析、
+3 个明确未解析，Dresden 5/2，Hannover 4/0；这只是随来源复核继续扩展的恢复断点，
+并不表示全量几何或地图语义完成。
 
 ## 埃森来源与边界
 
@@ -58,11 +67,11 @@ PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.dresden \
 
 ## 纽伦堡来源与边界
 
-[巴伐利亚警方原生公告](https://www.polizei.bayern.de/aktuelles/pressemitteilungen/)受其 [robots.txt](https://www.polizei.bayern.de/robots.txt) 的 `Disallow: /` 阻挡，本仓库不请求原生站的索引或文章。[Presseportal 上由 Polizeipräsidium Mittelfranken 署名的新闻室](https://www.presseportal.de/blaulicht/nr/6013)提供另一条有界本地采集路径。2026-09-28 核验时，[Presseportal robots.txt](https://www.presseportal.de/robots.txt) 允许该新闻室及文章路径；程序每次运行重新核验规则，规则缺失、请求被禁止或发布者不符时停止接收相应内容。请求间隔至少一秒，并遵守 robots 的更慢限制；单次最多续扫 10 页、检查 30 篇正文，失败重试有上限。年度游标和原文存于本机 `.runtime/safety/cities/nuremberg/newsroom.sqlite`，保存新闻室 ID、规范 URL、正文 SHA-256、修订历史与待审状态。旧的巴伐利亚原生页面人工暂存仍单独保存在 `police.sqlite`，不与新闻室表混写。
+[Presseportal 上由 Polizeipräsidium Mittelfranken 署名的新闻室](https://www.presseportal.de/blaulicht/nr/6013)是所有者为 Nuremberg 选定的来源通道。2026-09-28 核验时，[Presseportal robots.txt](https://www.presseportal.de/robots.txt) 允许该新闻室及文章路径；程序每次运行重新核验规则，规则缺失、请求被禁止或发布者不符时停止接收相应内容。请求间隔至少一秒，并遵守 robots 的更慢限制；单次最多续扫 10 页、检查 30 篇正文，失败重试有上限。年度游标和原文存于本机 `.runtime/safety/cities/nuremberg/newsroom.sqlite`，保存新闻室 ID、规范 URL、正文 SHA-256、修订历史与待审状态。旧的巴伐利亚原生页面人工暂存仍单独保存在 `police.sqlite`，不与新闻室表混写，也不再作为来源完整性的前置要求。本仓库不抓取巴伐利亚警方原生站。
 
 这个新闻室覆盖整个 Mittelfranken，包括 Fürth、Erlangen、Ansbach 等市镇及跨市高速。`nuremberg_candidate` 仅在正文有明确市域线索且没有已知混合辖区/区域道路提示时作为**复核候选**；新闻室标题、`Nürnberg (ots)` 发稿地及警局地址均不证明案发地。一次公告可能包含多地、多案或非案件内容，必须逐篇核查。
 
-新闻室页码走到较早年份，只能说明本地已扫描到该新闻室的一个断点。新闻室与受阻的原生档案是否一致、历史公告是否齐全尚未核实，所以 `archive_complete` 和 `publication_ready` 对纽伦堡始终为 `false`。警方公告本身也不是全量犯罪记录。来源核验、逐篇 Codex 审查、所有者质询与批准之前，不发布记录或地图。
+选定新闻室的 2026 年遍历已经跨入 2025，当前 849/849 正文通过来源与哈希核验，因此该选定通道的 `archive_complete` 为 `true`。这不表示 Nuremberg 市域筛选、犯罪清单或地图完成；新闻室覆盖整个 Mittelfranken，警方公告本身也不是全量犯罪记录。逐篇 Codex 市域与多场景审查、所有者质询与批准之前，`publication_ready` 仍为 `false`，不发布记录或地图。
 
 ## 四城只读来源契约
 

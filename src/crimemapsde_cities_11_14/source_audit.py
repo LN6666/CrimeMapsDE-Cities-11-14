@@ -258,8 +258,7 @@ def audit_city(
                         scan = db.execute(
                             f"SELECT complete FROM {cursor_table} WHERE year=?", (year,)
                         ).fetchone()
-                        if slug != "nuremberg":
-                            result["archive_complete"] = scan is not None and scan["complete"] == 1
+                        result["archive_complete"] = scan is not None and scan["complete"] == 1
                     rows = db.execute(
                         "SELECT * FROM reports WHERE published LIKE ? ORDER BY published, rowid",
                         (f"{year:04d}-%",),
@@ -284,10 +283,7 @@ def audit_city(
             result["archive_complete"] = False
             result["source_verified"] = False
             result["blocking_reasons"].append("source_db_unreadable")
-    if slug == "nuremberg":
-        result["blocking_reasons"].append("native_archive_robots_blocked")
-        result["blocking_reasons"].append("newsroom_coverage_unverified")
-    elif city.collection_mode == "offline":
+    if city.collection_mode == "offline":
         result["blocking_reasons"].append("live_source_access_blocked")
     if not result["archive_complete"]:
         result["blocking_reasons"].append("archive_completeness_unverified")
