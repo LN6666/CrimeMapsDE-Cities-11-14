@@ -201,6 +201,74 @@ def test_explicit_zero_incident_and_empty_location_inventory_is_allowed(tmp_path
     db.close()
 
 
+def test_review_pack_event_time_route_and_poi_context_are_preserved(tmp_path):
+    body = (
+        BODY
+        + " Der Vorfall ereignete sich am 1. Januar 2026 um 14:30 Uhr."
+        + " In der Buslinie 29 wurde eine Person bedroht."
+    )
+    db, url = source_db(
+        tmp_path / "sources.sqlite", native_columns=True, body=body
+    )
+    files = decision_files(tmp_path, city="nuremberg", url=url, body=body)
+    _, _, scenes, write, *_ = files
+    article = scenes["articles"][0]
+    article["incidents"][0]["details"] = "A separate, source-backed robbery scene."
+    article["incidents"][0]["event_time"] = {
+        "display": "1. Januar 2026 um 14:30 Uhr",
+        "date": "2026-01-01",
+        "precision": "exact",
+        "evidence_quote": "Der Vorfall ereignete sich am 1. Januar 2026 um 14:30 Uhr.",
+    }
+    article["formal_locations"][0]["poi_contexts"] = [
+        {
+            "kind": "market",
+            "scope": "named_object",
+            "radius_m": 0,
+            "evidence_quote": QUOTE_ONE,
+        }
+    ]
+    article["formal_locations"].append(
+        {
+            "location_id": f"{IDENT}:location:4",
+            "label": "Buslinie 29, genauer Abschnitt unbekannt",
+            "role": "incident",
+            "precision": "route",
+            "city_scope": "in_city",
+            "evidence_quotes": ["In der Buslinie 29 wurde eine Person bedroht."],
+            "coordinates": None,
+            "transit_route": {
+                "mode": "bus",
+                "line": "29",
+                "extent": "source_segment",
+                "evidence_quote": "In der Buslinie 29 wurde eine Person bedroht.",
+            },
+        }
+    )
+    article["incidents"][0]["formal_location_ids"].append(f"{IDENT}:location:4")
+    write()
+    result = run_import(db, files, city="nuremberg")
+    assert result["review_counts"]["supported"] == 1
+    stored = current_supported_decisions(db, "nuremberg")[0]["scene_inventory"]
+    assert stored["incidents"][0]["event_time"]["date"] == "2026-01-01"
+    assert stored["incidents"][0]["details"] == "A separate, source-backed robbery scene."
+    assert stored["formal_locations"][0]["poi_contexts"][0]["kind"] == "market"
+    assert stored["formal_locations"][3]["transit_route"]["line"] == "29"
+    assert run_import(db, files, city="nuremberg")["unchanged"] == 1
+    db.close()
+
+
+def test_route_without_transit_evidence_is_rejected(tmp_path):
+    db, url = source_db(tmp_path / "sources.sqlite", native_columns=True)
+    files = decision_files(tmp_path, city="nuremberg", url=url)
+    _, _, scenes, write, *_ = files
+    scenes["articles"][0]["formal_locations"][1]["precision"] = "route"
+    write()
+    with pytest.raises(ValueError, match="requires transit metadata"):
+        run_import(db, files, city="nuremberg")
+    db.close()
+
+
 @pytest.mark.parametrize("component", ["review", "scope", "incident", "location"])
 def test_every_semantic_level_requires_a_verbatim_full_text_quote(tmp_path, component):
     db, url = source_db(tmp_path / "sources.sqlite")

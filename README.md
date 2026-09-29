@@ -13,16 +13,18 @@
 
 ## 当前本地来源状态
 
-2026-09-29 的 Git 忽略检查点如下。数量表示已发现公告／已保存正文，不表示市域案件数或地图完成度：
+来源采集检查点如下；前三城的审核快照为 2026-09-29，纽伦堡审核更新于 2026-09-30。数量表示已发现公告／已保存正文，不表示市域案件数或地图完成度：
 
 | 城市 | 当前检查点 | 仍待处理 |
 | --- | ---: | --- |
 | Essen | 402 / 402 | 警方原生档案 2026 通道遍历完成；可见首段摘要与后续正文已一并重抓，402 条来源哈希全部更新，0 缺失正文、0 来源错误；本地 8 篇已有当前哈希绑定的逐篇语义决定，394 篇待复核 |
 | Dresden | 479 / 479 | 官方 Medienservice 2026 通道 80 页遍历完成、0 缺失正文、0 来源错误；本地 8 篇已有当前哈希绑定的逐篇语义决定，471 篇待复核 |
 | Hannover | 470 / 470 | 警方链接新闻室的 2026 列表遍历已跨入 2025，正文哈希全部复核一致；本地 8 篇已有当前哈希绑定的逐篇语义决定，462 篇待复核 |
-| Nuremberg | 849 / 849 | 选定的警方署名 Presseportal 新闻室 2026 来源收集完成；仍需 Mittelfranken 市域筛选、多场景复核与所有者批准 |
+| Nuremberg | 849 / 849 | 选定的警方署名 Presseportal 新闻室 2026 来源收集完成；前 30 篇已保存当前来源哈希绑定的逐篇 LLM 决定，819 篇待审；全量几何、地图及所有者批准未完成 |
 
 纽伦堡的 169 条基线输入和 680 条差量输入 source ID 零重叠，合并覆盖 849 条。这里的完成仅指所有者选定的警方署名分发通道；不能据此声称纽伦堡市域审查或地图完成。所有检查点、原文和生成数据均保持 Git 忽略。
+
+纽伦堡首 30 篇完整原文已由 LLM 逐篇分析并通过来源 URL、正文 SHA-256、逐字证据和幂等重导校验，保留 58 个来源场景与 124 个正式地点（市内 51、市外 53、市域不明 20），全部 58 个场景保留时间决定与详情，尚无填入坐标。场景包含行动、非犯罪背景和旧案重述，数量不是犯罪宗数。`6189815` 的市内搜索/抓捕不能变成 Veitsbronn 抢劫的市内案发点；`6191504` 明确续报 `6190807` 的同一杀人案，最终计数须去重。`6191677` 的三家投注站按各自地址与时间拆开，但原文未指定哪一家入侵未遂，不擅自分配盗款结果。当前决定摘要为 `1a24f3a1773c16fa7e8a1bd40e40820c1167f16056db6ad4913e724258053450`，下一原文批次为 `source-batch-0004.ndjson`；所有者检查与批准仍未完成。
 
 上述三城语义决定是 2026-09-29 的本地恢复断点，不是抽样准确率或发布成果。三城的
 首批决定均已通过 URL、正文 SHA-256、逐字证据、事件/正式地点完整声明和幂等重导校验；
@@ -99,6 +101,8 @@ PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.review_decisions \
 三个文件必须覆盖完全相同的 `source_id` 集合，并在每条记录中重复 `schema_version: 1`、`city`、`source_id`、`source_url` 和 `source_sha256`。这些字段必须与本地检查点的当前全文完全一致。review 文件另含 `verdict`、逐字 `evidence_quotes`、`review_note`、`reviewer` 和带时区的 `reviewed_at`；scope 文件另含 `scope_verdict`（`in_city`、`out_of_city`、`mixed` 或 `uncertain`）及逐字引文。
 
 scene 文件是 `{"schema_version":1,"city":"...","articles":[...]}`。每篇必须明确给出非负 `incident_count`、同样长度的 `incidents`、完整 `formal_locations`，并把 `incidents_complete` 与 `formal_locations_complete` 显式设为 `true`。每个案件及每个正式地点都要有能在当前完整正文中逐字找到的引文；一个案件可以引用多个地点，一篇也可以包含多个案件。零案件和零地点是允许的显式决定。街道、区域、区级及未知精度地点不得带代表点坐标，后续 GIS 阶段应保留道路或区域几何，无法确定的几何继续为空。
+
+为保留来源包中的时间、详情、移动公交与 POI 语境，事件可额外提供 `event_time` 和 `details`，地点可提供 `transit_route` 和 `poi_contexts`。`event_time` 包含 `display`、可为空的 ISO 日期 `date`、`precision`（`exact/approximate/date/range/unknown`）及逐字 `evidence_quote`。`route` 精度必须提供交通方式、线路、范围和证据，不能带代表点坐标；游行道路不因此成为公交线路。POI 语境只接受带逐字证据的 `along_geometry/near_geometry/named_object` 决定；空列表是显式的无关联决定，附近场所不自动成为案发地。缺少这些可选字段的既有决定仍可读取，程序不会补写语义。
 
 导入在全部记录验证通过后才原子写入本地 `llm_review_decisions` 和历史表。源正文哈希或 URL 改变会让旧决定成为 stale；决定内容改变会生成新的 `decision_set_digest`，因此任何绑定旧摘要的后续批准都失效。导入结果始终返回 `owner_approval_required: true`、`owner_approved: false` 和 `publication_ready: false`。原文、三个决定文件及本地决定表均属于运行时材料，必须留在 Git 忽略目录中。
 
