@@ -161,10 +161,12 @@ class ArticleParser(HTMLParser):
         self.expected_path = expected_path
         self.stack: list[str] = []
         self.target_depth: int | None = None
+        self.teaser_depth: int | None = None
         self.body_depth: int | None = None
         self.author_depth: int | None = None
         self.found_target = False
         self.author: list[str] = []
+        self.teaser: list[str] = []
         self.parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -187,14 +189,20 @@ class ArticleParser(HTMLParser):
             and any(item == "article" for item in self.stack[self.target_depth :])
         )
         if tag == "div" and self.target_depth is not None and not inside_nested_article:
-            if "field--name-body" in classes:
+            if "field--name-field-base-teaser-text" in classes:
+                self.teaser_depth = depth
+            elif "field--name-body" in classes:
                 self.body_depth = depth
             elif "field--name-field-press-release-author" in classes:
                 self.author_depth = depth
+        if self.teaser_depth is not None and tag == "br":
+            self.teaser.append("\n")
         if self.body_depth is not None and tag == "br":
             self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
+        if self.teaser_depth is not None:
+            self.teaser.append(data)
         if self.body_depth is not None:
             self.parts.append(data)
         if self.author_depth is not None:
@@ -205,9 +213,13 @@ class ArticleParser(HTMLParser):
         if tag in VOID_TAGS:
             return
         depth = len(self.stack)
+        if self.teaser_depth is not None and tag in {"p", "li", "br"}:
+            self.teaser.append("\n")
         if self.body_depth is not None and tag in {"p", "li", "br"}:
             self.parts.append("\n")
         if tag == "div":
+            if depth == self.teaser_depth:
+                self.teaser_depth = None
             if depth == self.body_depth:
                 self.body_depth = None
             if depth == self.author_depth:
@@ -235,8 +247,17 @@ def article_record(page: str, requested_url: str) -> dict:
     parser.feed(page)
     if not parser.found_target:
         raise ValueError("Native Essen press-release article container missing")
-    body = "\n".join(_text(part) for part in "".join(parser.parts).splitlines() if _text(part))
-    if _text("".join(parser.author)) != "Polizei Essen" or len(body) < 30:
+    teaser = "\n".join(
+        _text(part) for part in "".join(parser.teaser).splitlines() if _text(part)
+    )
+    main_body = "\n".join(
+        _text(part) for part in "".join(parser.parts).splitlines() if _text(part)
+    )
+    sections = [part for part in (teaser, main_body) if part]
+    if len(sections) == 2 and sections[0] == sections[1]:
+        sections.pop()
+    body = "\n".join(sections)
+    if _text("".join(parser.author)) != "Polizei Essen" or len(main_body) < 30 or len(body) < 30:
         raise ValueError("Native Essen publisher or body check failed")
     return {"source_id": node[1], "source_url": url, "body": body}
 

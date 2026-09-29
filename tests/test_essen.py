@@ -18,6 +18,7 @@ ARTICLE = r"""<link rel="canonical" href="https://essen.polizei.nrw/presse/essen
 <div class="field field--name-body"><p>Bildbeschreibung außerhalb des Meldungstextes.</p></div>
 </article>
 <div class="field field--name-field-press-release-author">Polizei Essen</div>
+<div class="field field--name-field-base-teaser-text">Am Samstag begann der Einsatz am Nordplatz.</div>
 <div class="field field--name-body"><p>Essen-Nordviertel:</p>
 <p>Am Samstag ereignete sich ein Überfall am Nordplatz.</p><p>Zeugen werden gesucht.</p></div>
 </article><aside>Ein Mülheimer Fest in der Falschestraße.</aside>
@@ -41,6 +42,7 @@ def test_article_uses_native_node_id_and_excludes_sidebar():
     url = "https://essen.polizei.nrw/presse/essen-fall"
     record = essen.article_record(ARTICLE, url)
     assert record["source_id"] == "217129"
+    assert record["body"].startswith("Am Samstag begann der Einsatz am Nordplatz.\n")
     assert "Überfall am Nordplatz" in record["body"]
     assert "Falschestraße" not in record["body"]
     assert "Bildbeschreibung" not in record["body"]
