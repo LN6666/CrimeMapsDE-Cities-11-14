@@ -133,7 +133,7 @@ class ArticleParser(HTMLParser):
             self.in_story = True
         elif self.in_story and tag == "p" and "customer" in classes:
             self.in_customer = True
-        elif self.in_story and self.after_heading and tag in {"p", "li"}:
+        elif self.in_story and self.after_heading and tag in {"p", "li", "pre"}:
             if "contact-headline" in classes or "originator" in classes:
                 self.stopped = True
             elif not self.stopped and self.current_tag is None:
@@ -151,7 +151,7 @@ class ArticleParser(HTMLParser):
             return
         if tag == "h1":
             self.after_heading = True
-        elif tag in {"p", "li"}:
+        elif tag in {"p", "li", "pre"}:
             if tag == "p":
                 self.in_customer = False
             if self.current_tag == tag:

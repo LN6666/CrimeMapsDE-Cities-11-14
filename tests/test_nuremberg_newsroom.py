@@ -53,6 +53,26 @@ def test_article_parser_keeps_story_lists_but_rejects_wrong_publisher_and_contac
         ))
 
 
+def test_article_parser_preserves_preformatted_evidence_in_order():
+    page = ARTICLE.replace(
+        '<p class="contact-headline">',
+        '<p>Die Beweismittel sind:</p>'
+        '<pre>- Ein &amp; zwei <a>Hinweise am Fundort</a>.\n'
+        '- Ein Schuhabdruck wurde gesichert.</pre>'
+        '<p>Die Ermittlungen dauern an.</p><p class="contact-headline">',
+    ).replace(
+        '<ul><li>Kontaktliste außerhalb des Berichts.</li></ul>',
+        '<pre>Kontaktblock außerhalb des Berichts.</pre>',
+    )
+    body = newsroom.article_body(page)
+    assert (
+        'Die Beweismittel sind: - Ein & zwei Hinweise am Fundort . '
+        '- Ein Schuhabdruck wurde gesichert. Die Ermittlungen dauern an.'
+    ) in body
+    assert body.count('Ein Schuhabdruck') == 1
+    assert 'Kontaktblock' not in body
+
+
 def test_collector_never_assigns_semantic_municipality_scope():
     for title, body in (
         ("POL-MFR: Nürnberg", "Nürnberg (ots) Allgemeine Mitteilung."),
