@@ -1,5 +1,7 @@
 """Synthetic newsroom checks; no live police or publisher requests."""
 
+from datetime import UTC, datetime
+
 import httpx
 import pytest
 
@@ -124,6 +126,11 @@ def test_report_id_body_hash_revision_and_review_invalidation(tmp_path):
 
 def test_bounded_newsroom_cursor_resumes_and_never_claims_archive_complete(tmp_path, monkeypatch):
     requested = []
+    # Keep the fixture inside the two-day refresh window as the real date moves.
+    # Advance each observation so the independent run timestamps stay unique.
+    fixture_start = datetime(2026, 9, 29, 12, tzinfo=UTC).timestamp()
+    fixture_clock = iter(fixture_start + offset for offset in range(1000))
+    monkeypatch.setattr(newsroom.time, "time", lambda: next(fixture_clock))
 
     def respond(request):
         requested.append(request.url.path)
