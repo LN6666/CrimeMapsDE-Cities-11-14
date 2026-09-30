@@ -99,6 +99,8 @@ PYTHONPATH=src uv run python -m crimemapsde_cities_11_14.dresden \
 
 纽伦堡地图分类队列已完成：原408篇均已有显式LLM分类，其中10篇先前mixed的区域统计、失踪线索或市外案件没有明确本市场景，阅读全文后改为scope uncertain。当前本市可显示队列398/398篇、729场景、18公告级计数参照、0待处理；这10篇的分类另存，所有原文、场景和地点仍保留。当前 supported 清单摘要为 `ac43731e184250e7107d59efb30e0df436cc51c05820d6fa7dfa1bffff3c4ebe`，全部849条来源决定集合摘要为 `27187ea8d31369611d620dd10dfa8db57a5d7f1592c1ad411592f46f14506c26`。1,561项几何请求和派生几何完全未变，不重复计算。五个分类恢复分片与45个当前文件SHA-256校验通过，旧状态可从本地历史快照恢复。原15篇来源uncertain仍阻挡正式地图编译，最终关系计数、浏览器候选和所有者批准仍未完成。主工程简明断点见 `docs/NUREMBERG-PROGRESS.md`。
 
+2026-09-30 18:49 UTC（日本时间10月1日）重新核查15篇疑点原文：robots验证通过，请求间隔至少1秒，15篇正文哈希全部未变，未获得消除疑点的新证据。该次只复查已知疑点，没有刷新档案首页；849篇仍是已收集的选定快照，不据此宣称后来新增公告也已收完。原文、语义决定和几何未改，复查证据保存在本地忽略的 `.runtime/review/nuremberg/question-source-recheck-20261001/`。本窗口先继续纽伦堡的来源疑点、最终同案计数及浏览器候选收尾，斯图加特进度已保存。
+
 ## 纽伦堡来源与边界
 
 [Presseportal 上由 Polizeipräsidium Mittelfranken 署名的新闻室](https://www.presseportal.de/blaulicht/nr/6013)是所有者为 Nuremberg 选定的来源通道。2026-09-28 核验时，[Presseportal robots.txt](https://www.presseportal.de/robots.txt) 允许该新闻室及文章路径；程序每次运行重新核验规则，规则缺失、请求被禁止或发布者不符时停止接收相应内容。请求间隔至少一秒，并遵守 robots 的更慢限制；单次最多续扫 10 页、检查 30 篇正文，失败重试有上限。年度游标和原文存于本机 `.runtime/safety/cities/nuremberg/newsroom.sqlite`，保存新闻室 ID、规范 URL、正文 SHA-256、修订历史与待审状态。旧的巴伐利亚原生页面人工暂存仍单独保存在 `police.sqlite`，不与新闻室表混写，也不再作为来源完整性的前置要求。本仓库不抓取巴伐利亚警方原生站。
