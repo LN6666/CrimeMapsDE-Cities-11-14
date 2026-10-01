@@ -29,9 +29,7 @@ ARTICLE_PATH = re.compile(r"/presse/[a-z0-9][a-z0-9-]*$")
 NODE_ID = re.compile(r'"currentPath":"node\\?/+(\d+)"')
 CANONICAL = re.compile(r'<link\s+rel="canonical"\s+href="([^"]+)"')
 NEXT_PAGE = re.compile(r'href="\?[^"]*?\bpage=(\d+)"[^>]*title="Zur nächsten Seite"')
-ARTICLE = re.compile(
-    r'<article\s+about="([^"]+)"[^>]*node--type--press-release[^>]*>.*?</article>', re.DOTALL
-)
+VOID_TAGS = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"})
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS reports (
  source_url TEXT PRIMARY KEY,
@@ -158,43 +156,83 @@ def next_archive_page(page: str) -> int | None:
 
 
 class ArticleParser(HTMLParser):
-    def __init__(self) -> None:
+    def __init__(self, expected_path: str) -> None:
         super().__init__(convert_charrefs=True)
-        self.depth = 0
-        self.body_depth = None
-        self.author_depth = None
+        self.expected_path = expected_path
+        self.stack: list[str] = []
+        self.target_depth: int | None = None
+        self.teaser_depth: int | None = None
+        self.body_depth: int | None = None
+        self.author_depth: int | None = None
+        self.found_target = False
         self.author: list[str] = []
+        self.teaser: list[str] = []
         self.parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag != "div":
-            return
-        self.depth += 1
-        classes = (dict(attrs).get("class") or "").split()
-        if "field--name-body" in classes:
-            self.body_depth = self.depth
-        elif "field--name-field-press-release-author" in classes:
-            self.author_depth = self.depth
+        tag = tag.casefold()
+        attrs_by_name = dict(attrs)
+        if tag not in VOID_TAGS:
+            self.stack.append(tag)
+        depth = len(self.stack)
+        classes = (attrs_by_name.get("class") or "").split()
+        if (
+            tag == "article"
+            and self.target_depth is None
+            and attrs_by_name.get("about") == self.expected_path
+            and "node--type--press-release" in classes
+        ):
+            self.target_depth = depth
+            self.found_target = True
+        inside_nested_article = bool(
+            self.target_depth is not None
+            and any(item == "article" for item in self.stack[self.target_depth :])
+        )
+        if tag == "div" and self.target_depth is not None and not inside_nested_article:
+            if "field--name-field-base-teaser-text" in classes:
+                self.teaser_depth = depth
+            elif "field--name-body" in classes:
+                self.body_depth = depth
+            elif "field--name-field-press-release-author" in classes:
+                self.author_depth = depth
+        if self.teaser_depth is not None and tag == "br":
+            self.teaser.append("\n")
+        if self.body_depth is not None and tag == "br":
+            self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
+        if self.teaser_depth is not None:
+            self.teaser.append(data)
         if self.body_depth is not None:
             self.parts.append(data)
         if self.author_depth is not None:
             self.author.append(data)
 
     def handle_endtag(self, tag: str) -> None:
+        tag = tag.casefold()
+        if tag in VOID_TAGS:
+            return
+        depth = len(self.stack)
+        if self.teaser_depth is not None and tag in {"p", "li", "br"}:
+            self.teaser.append("\n")
         if self.body_depth is not None and tag in {"p", "li", "br"}:
             self.parts.append("\n")
         if tag == "div":
-            if self.depth == self.body_depth:
+            if depth == self.teaser_depth:
+                self.teaser_depth = None
+            if depth == self.body_depth:
                 self.body_depth = None
-            if self.depth == self.author_depth:
+            if depth == self.author_depth:
                 self.author_depth = None
-            self.depth -= 1
+        if tag == "article" and depth == self.target_depth:
+            self.target_depth = None
+        if self.stack:
+            self.stack.pop()
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if self.body_depth is not None and tag == "br":
-            self.parts.append("\n")
+        self.handle_starttag(tag, attrs)
+        if tag.casefold() not in VOID_TAGS:
+            self.handle_endtag(tag)
 
 
 def article_record(page: str, requested_url: str) -> dict:
@@ -205,47 +243,28 @@ def article_record(page: str, requested_url: str) -> dict:
     url = _article_url(canonical[1])
     if url != requested_url:
         raise ValueError("Native Essen canonical URL differs from fetched URL")
-    article = ARTICLE.search(page)
-    if not article or article[1] != urlparse(url).path:
+    parser = ArticleParser(urlparse(url).path)
+    parser.feed(page)
+    if not parser.found_target:
         raise ValueError("Native Essen press-release article container missing")
-    parser = ArticleParser()
-    parser.feed(article[0])
-    body = "\n".join(_text(part) for part in "".join(parser.parts).splitlines() if _text(part))
-    if _text("".join(parser.author)) != "Polizei Essen" or len(body) < 30:
+    teaser = "\n".join(
+        _text(part) for part in "".join(parser.teaser).splitlines() if _text(part)
+    )
+    main_body = "\n".join(
+        _text(part) for part in "".join(parser.parts).splitlines() if _text(part)
+    )
+    sections = [part for part in (teaser, main_body) if part]
+    if len(sections) == 2 and sections[0] == sections[1]:
+        sections.pop()
+    body = "\n".join(sections)
+    if _text("".join(parser.author)) != "Polizei Essen" or len(main_body) < 30 or len(body) < 30:
         raise ValueError("Native Essen publisher or body check failed")
     return {"source_id": node[1], "source_url": url, "body": body}
 
 
-LEAD = re.compile(
-    r"^\s*(?:\d{5}\s+)?(?P<city>Essen|E\.|Mülheim\s+an\s+der\s+Ruhr|Mülheim|MH\.|Oberhausen|OB\.)"
-    r"(?:[-.\s][^:\n]{0,55})?:",
-    re.IGNORECASE | re.MULTILINE,
-)
-OUTSIDE = re.compile(
-    r"\b(?:Mülheim(?:\s+an\s+der\s+Ruhr)?|Oberhausen|Duisburg|Bottrop|Gelsenkirchen)\b", re.IGNORECASE
-)
-INSIDE = re.compile(r"\bEssen(?:-[\wÄÖÜäöüß]+)?\b", re.IGNORECASE)
-MOTORWAY = re.compile(r"\b(?:Autobahn|Bundesautobahn|BAB\s*\d+|A\s*\d{1,3})\b", re.IGNORECASE)
-
-
-def city_scope(title: str, body: str) -> tuple[str, str]:
-    """Flag likely municipality for review; never infer an incident coordinate."""
-    narrative = re.sub(
-        r"\b(?:Polizei|Polizeipräsidium|Staatsanwaltschaft)\s+Essen\b", "", title + "\n" + body
-    )
-    if motorway := MOTORWAY.search(narrative):
-        return "needs_review", f"motorway requires scene review: {motorway[0]}"
-    leads = list(LEAD.finditer(body))
-    if len(leads) != 1:
-        return "needs_review", "no single explicit municipal scene heading"
-    lead = leads[0]["city"]
-    if lead.lower() in {"essen", "e."}:
-        if outside := OUTSIDE.search(narrative):
-            return "needs_review", f"Essen lead and other municipality: {outside[0]}"
-        return "essen_candidate", leads[0][0]
-    if INSIDE.search(narrative):
-        return "needs_review", f"outside-city lead and Essen mention: {lead}"
-    return "outside_candidate", leads[0][0]
+def city_scope(_title: str, _body: str) -> tuple[str, str]:
+    """Keep every fetched report pending for full-text LLM municipal review."""
+    return "needs_review", "full-text LLM municipal and scene review required"
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
@@ -363,15 +382,8 @@ def sync(
     db.commit()
     try:
         with httpx.Client(timeout=25, follow_redirects=False, headers={"User-Agent": USER_AGENT}) as client:
-            for attempt in range(3):
-                try:
-                    robots_response = client.get(ORIGIN + "/robots.txt")
-                    robots_response.raise_for_status()
-                    break
-                except httpx.HTTPError:
-                    if attempt == 2:
-                        raise
-                    time.sleep(2**attempt)
+            robots_response = client.get(ORIGIN + "/robots.txt")
+            robots_response.raise_for_status()
             if (
                 str(robots_response.url) != ORIGIN + "/robots.txt"
                 or "user-agent:" not in robots_response.text.lower()
@@ -390,20 +402,9 @@ def sync(
                         raise ValueError("Unexpected native Essen origin")
                     if not robots.can_fetch(USER_AGENT, url):
                         raise ValueError("robots.txt disallows " + url)
-                    for attempt in range(3):
-                        time.sleep(max(0, delay - (time.monotonic() - last_request)))
-                        last_request = time.monotonic()
-                        try:
-                            response = client.get(url, headers=headers)
-                        except httpx.TransportError:
-                            if attempt == 2:
-                                raise
-                            time.sleep(2**attempt)
-                            continue
-                        if (response.status_code == 429 or response.status_code >= 500) and attempt < 2:
-                            time.sleep(2**attempt)
-                            continue
-                        break
+                    time.sleep(max(0, delay - (time.monotonic() - last_request)))
+                    last_request = time.monotonic()
+                    response = client.get(url, headers=headers)
                     if response.status_code in (301, 302, 303, 307, 308):
                         url = urljoin(str(response.url), response.headers["location"])
                         continue
@@ -473,6 +474,12 @@ def sync(
                 except (httpx.HTTPError, ValueError) as exc:
                     fail(db, row["source_url"], f"{type(exc).__name__}: {exc}", time.time())
                     stats["failed"] += 1
+                    stats["stopped_on_source_error"] = {
+                        "source_url": row["source_url"],
+                        "http_status": exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None,
+                        "error_type": type(exc).__name__,
+                    }
+                    break
             stats["stored"] = db.execute(
                 "SELECT count(*) FROM reports WHERE published LIKE ? AND body IS NOT NULL", (f"{year}-%",)
             ).fetchone()[0]
