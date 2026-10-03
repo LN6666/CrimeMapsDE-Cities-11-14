@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "city": "essen",
+  "locale": "en",
+  "layout": "wide",
+  "presentation": "world_map_and_rank",
+  "path": "docs/assets/visitors-by-country.en.svg",
+  "sha256": "d34813bbaf149cc117f1c4298eae3227a4c4243e41ffe3ee7ce744d3499ef5e5",
+  "source_kind": "not_connected",
+  "collection_status": "not_connected",
+  "metric": null,
+  "source": null,
+  "generated_at_utc": null
+}
